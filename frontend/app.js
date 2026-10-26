@@ -11,7 +11,8 @@ const CATS = {
 };
 // 카카오 카테고리 그룹 코드 → 분류
 const GROUP_CAT = { AD5: 'stay', FD6: 'food', CE7: 'cafe', AT4: 'sight', CT1: 'sight' };
-const ROUTE_COLOR = '#1E2A44';
+const ROUTE_COLOR = '#E8283C';   // 경로선 (빨강, 흰 테두리를 둘러 지도 위에서 잘 보이게)
+const INK = '#1E2A44';
 const DEFAULT_VIEW = { lat: 35.86, lng: 128.6, level: 8 };   // 대구
 const MAX_MARKERS = 31;   // 카카오 다중 경유지 길찾기 한도(32) — 숙소 왕복이면 출발지가 한 번 더 들어감
 
@@ -159,7 +160,8 @@ function move(from, to) {
 }
 function fitAll() {
   if (!KMap.ready() || !state.markers.length) return;
-  KMap.fit(currentRoute()?.path || state.markers.map(p => [p.lat, p.lng]));
+  const roads = (currentRoute()?.paths || []).flatMap(p => p || []);
+  KMap.fit([...roads, ...state.markers.map(p => [p.lat, p.lng])]);
 }
 
 // ───────────── 화면 ─────────────
@@ -264,8 +266,12 @@ function renderFoot() {
   const stopsCount = P.stops.length + (P.stay && !P.roundTrip ? 1 : 0);
   let html = '';
   if (info) {
+    const straight = info.legs.filter((l, k) => l.km > 0 && !info.paths?.[k]).length;
+    const basis = info.source !== 'kakao' ? ', 직선거리 추정'
+      : straight ? `, ${straight}구간은 직선거리 추정`
+      : state.mode === 'car' ? '' : ', 도로 거리로 추정';
     html = `<span class="big">${human(info.totalMin)}</span><span class="big">${info.totalKm}km</span>
-      <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${info.source !== 'kakao' ? ', 직선거리 추정' : state.mode === 'car' ? '' : ', 도로 거리로 추정'}</span>`;
+      <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${basis}</span>`;
   } else if (P.points.length >= 2) {
     html = '<span class="muted">경로를 계산하고 있어요…</span>';
   } else if (state.markers.length) {
@@ -280,12 +286,16 @@ function renderMap() {
   if (!KMap.ready()) return;
   KMap.clear('manual');
   const { P, info, num } = routeView();
-  // 계산 중에는 핀만 보여 주고, 도로 경로를 받으면 도로를 따라 그림. 직선 점선은 도로 경로를 못 받았을 때만
+  // 계산 중에는 핀만 보여 주고, 구간마다 도로를 따라 그림. 도로 경로를 못 찾은 구간만 직선 점선
   if (P.points.length >= 2 && info) {
     const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
-    const path = info.path || seq.map(p => [p.lat, p.lng]);
-    KMap.line('manual', path, '#FFFFFF', { weight: 9, opacity: 0.9, dashed: !info.path });
-    KMap.line('manual', path, ROUTE_COLOR, { weight: 5, opacity: 0.9, dashed: !info.path });
+    info.legs.forEach((leg, k) => {
+      if (leg.km === 0) return;   // 같은 자리
+      const road = info.paths?.[k];
+      const path = road || [[seq[k].lat, seq[k].lng], [seq[k + 1].lat, seq[k + 1].lng]];
+      KMap.line('manual', path, '#FFFFFF', { weight: 9, opacity: 0.95, dashed: !road });
+      KMap.line('manual', path, ROUTE_COLOR, { weight: 5, opacity: 0.95, dashed: !road });
+    });
   }
   state.markers.forEach((m, i) => {
     const c = cat(m), inRoute = m.on, isLoopStay = P.stay === m;
@@ -329,7 +339,7 @@ function renderResults() {
   }).join('') + '<div class="res-foot"><button class="link-btn" data-act="closeResults">검색 결과 닫기</button></div>';
   if (!KMap.ready()) return;
   KMap.clear('base');
-  searchResults.forEach((r, i) => KMap.pin('base', { lat: r.lat, lng: r.lng, color: ROUTE_COLOR, size: 16, z: 10, title: r.name,
+  searchResults.forEach((r, i) => KMap.pin('base', { lat: r.lat, lng: r.lng, color: INK, size: 16, z: 10, title: r.name,
     onClick: () => showResult(i) }));
 }
 function showResult(i) {

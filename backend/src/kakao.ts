@@ -54,29 +54,50 @@ export async function multiDestination(key: string, origin: Place, dests: { key:
   return out;
 }
 
-export interface Section { duration: number; distance: number }
+/** 한 구간: 소요시간(초), 거리(m), 지도에 그릴 도로 좌표 [lat, lng][] */
+export interface Section { duration: number; distance: number; path: [number, number][] }
+type RawSection = { duration: number; distance: number; roads: { vertexes: number[] }[] };
+type RawRoutes = { routes?: { result_code: number; result_msg: string; sections?: RawSection[] }[] };
 
-/** 경유지 포함 자동차 경로. 구간별 소요시간(초)·거리(m)와 지도에 그릴 좌표를 돌려줌 */
-export async function waypointsRoute(key: string, pts: Place[]): Promise<{ sections: Section[]; path: [number, number][] }> {
-  const xy = (p: Place) => ({ x: p.lng, y: p.lat });
-  const data = await call<{ routes: { result_code: number; result_msg: string; sections?: (Section & { roads: { vertexes: number[] }[] })[] }[] }>(
-    `${NAVI}/waypoints/directions`, key, {
-      origin: xy(pts[0]),
-      destination: xy(pts[pts.length - 1]),
-      waypoints: pts.slice(1, -1).map(xy),
-      priority: 'RECOMMEND',
-    });
-  const route = data.routes?.[0];
-  if (!route || route.result_code !== 0 || !route.sections) throw new KakaoError(200, route?.result_msg ?? 'no route');
+function toSection(s: RawSection): Section {
   const path: [number, number][] = [];
-  for (const s of route.sections) for (const road of s.roads) {
+  for (const road of s.roads) {
     for (let i = 0; i + 1 < road.vertexes.length; i += 2) {
       const p: [number, number] = [+road.vertexes[i + 1].toFixed(5), +road.vertexes[i].toFixed(5)];
       const last = path[path.length - 1];
       if (!last || Math.abs(last[0] - p[0]) + Math.abs(last[1] - p[1]) > 0.0002) path.push(p);
     }
   }
-  return { sections: route.sections.map(s => ({ duration: s.duration, distance: s.distance })), path };
+  return { duration: s.duration, distance: s.distance, path };
+}
+function firstRoute(data: RawRoutes): RawSection[] {
+  const route = data.routes?.[0];
+  if (!route || route.result_code !== 0 || !route.sections) throw new KakaoError(200, route?.result_msg ?? 'no route');
+  return route.sections;
+}
+
+/** 경유지 포함 자동차 경로를 한 번에 조회. 한 구간이라도 길이 없으면 전체가 실패함 */
+export async function waypointsRoute(key: string, pts: Place[]): Promise<Section[]> {
+  const xy = (p: Place) => ({ x: p.lng, y: p.lat });
+  const data = await call<RawRoutes>(`${NAVI}/waypoints/directions`, key, {
+    origin: xy(pts[0]),
+    destination: xy(pts[pts.length - 1]),
+    waypoints: pts.slice(1, -1).map(xy),
+    priority: 'RECOMMEND',
+  });
+  return firstRoute(data).map(toSection);
+}
+
+/** 두 지점 사이 자동차 경로 한 구간 */
+export async function directions(key: string, a: Place, b: Place): Promise<Section> {
+  const q = new URLSearchParams({ origin: `${a.lng},${a.lat}`, destination: `${b.lng},${b.lat}`, priority: 'RECOMMEND' });
+  const sections = firstRoute(await call<RawRoutes>(`${NAVI}/directions?${q}`, key));
+  const merged = sections.map(toSection);
+  return {
+    duration: merged.reduce((t, s) => t + s.duration, 0),
+    distance: merged.reduce((t, s) => t + s.distance, 0),
+    path: merged.flatMap(s => s.path),
+  };
 }
 
 export const errMsg = (e: unknown) => (e instanceof KakaoError ? e.message : String(e)).slice(0, 120);

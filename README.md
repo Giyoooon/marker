@@ -26,7 +26,8 @@ curl -X POST $API/api/route -H 'Content-Type: application/json' -d '{
     { "name": "동성로",   "lat": 35.8690, "lng": 128.5960 }
   ]
 }'
-# → { order: [0, 2, 1], legs: [{ min, km, walk }...], totalMin, totalKm, path: [[lat, lng]...], source, warnings }
+# → { order: [0, 2, 1], legs: [{ min, km, walk }...], paths: [[[lat, lng]...] | null ...], totalMin, totalKm, source, warnings }
+# paths[i] 는 legs[i] 의 도로 좌표. 도로 경로를 못 찾은 구간만 null (화면에서 직선 점선)
 ```
 
 마커는 최대 32개 (카카오모빌리티 다중 경유지 한도). 대중교통·도보는 카카오 API가 없어 직선거리 기반 추정.

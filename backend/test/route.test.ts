@@ -16,7 +16,7 @@ describe('route (추정값)', () => {
     expect(res.legs).toHaveLength(2);
     expect(res.legs.every(l => l.min > 0 && l.km > 0)).toBe(true);
     expect(res.totalMin).toBe(res.legs[0].min + res.legs[1].min);
-    expect(res.path).toBeNull();
+    expect(res.paths).toEqual([null, null]);
   });
 
   it('같은 자리에 연달아 찍힌 마커는 이동 0', async () => {
@@ -51,7 +51,7 @@ describe('route (카카오)', () => {
     ]);
     expect(res.totalMin).toBe(25);
     expect(res.totalKm).toBe(10.5);
-    expect(res.path).toHaveLength(3);
+    expect(res.paths.map(p => p?.length ?? null)).toEqual([2, null, 2]);   // 같은 자리 구간은 그릴 것 없음
   });
 
   it('도보·대중교통도 도로를 따라 그리고, 시간은 도로 거리로 추정한다', async () => {
@@ -61,11 +61,11 @@ describe('route (카카오)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => kakao()));
     const walk = await route({ mode: 'walk', points: [A, B] }, { KAKAO_REST_KEY: 'k' });
     expect(walk.source).toBe('kakao');
-    expect(walk.path).toHaveLength(3);                          // 직선(2점)이 아니라 도로 좌표
+    expect(walk.paths[0]).toHaveLength(3);                       // 직선(2점)이 아니라 도로 좌표
     expect(walk.legs[0]).toEqual({ min: 60, km: 4.5, walk: true }); // 4.5km ÷ 4.5km/h
 
     const transit = await route({ mode: 'transit', points: [A, B] }, { KAKAO_REST_KEY: 'k' });
-    expect(transit.path).toHaveLength(3);
+    expect(transit.paths[0]).toHaveLength(3);
     expect(transit.legs[0]).toEqual({ min: 25, km: 4.5, walk: false }); // 자동차 10분 × 1.5 + 10
   });
 
@@ -74,7 +74,28 @@ describe('route (카카오)', () => {
     const res = await route({ mode: 'car', points: [A, C] }, { KAKAO_REST_KEY: 'k' });
     expect(res.source).toBe('estimate');
     expect(res.legs[0].min).toBeGreaterThan(0);
-    expect(res.warnings[0]).toContain('HTTP 401');
+    expect(res.warnings[0]).toContain('동대구역 → 수성못');
+  });
+
+  it('한 번에 조회가 실패하면 구간마다 다시 조회해서, 찾은 구간은 도로로 그린다', async () => {
+    const ok = (from: number[], to: number[], sec: number, m: number) => new Response(JSON.stringify({ routes: [{ result_code: 0, result_msg: 'ok',
+      sections: [{ duration: sec, distance: m, roads: [{ vertexes: [...from, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2, ...to] }] }] }] }));
+    const fetchMock = vi.fn(async (url: string) => {
+      // 경유지 한 번에 조회: 길 없는 구간이 있어서 실패
+      if (url.includes('/waypoints/')) return new Response(JSON.stringify({ routes: [{ result_code: 104, result_msg: '경로 없음' }] }));
+      const dest = new URL(url).searchParams.get('destination');
+      if (dest === `${B.lng},${B.lat}`) return ok([A.lng, A.lat], [B.lng, B.lat], 600, 4000);   // 동대구역 → 동성로: 됨
+      return new Response(JSON.stringify({ routes: [{ result_code: 104, result_msg: '경로 없음' }] })); // 동성로 → 수성못: 안 됨
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await route({ mode: 'car', points: [A, B, C] }, { KAKAO_REST_KEY: 'k' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);              // 한 번에 1 + 구간별 2
+    expect(res.source).toBe('kakao');
+    expect(res.paths[0]).toHaveLength(3);                     // 찾은 구간: 도로 좌표
+    expect(res.paths[1]).toBeNull();                          // 못 찾은 구간: 직선으로 표시
+    expect(res.legs[0]).toEqual({ min: 10, km: 4, walk: false });
+    expect(res.legs[1].km).toBeGreaterThan(0);                // 직선거리 추정값
+    expect(res.warnings).toEqual(['도로 경로를 찾지 못해 직선거리로 표시한 구간: 동성로 → 수성못']);
   });
 });
 
