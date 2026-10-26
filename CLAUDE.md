@@ -62,6 +62,9 @@
   - 다른 사람 변경 → 토스트(예: "민수 님이 📸 '김광석길'을 마킹했어요", 조사는 `josa()` 로 받침 처리) + 활동 기록(위쪽 "활동", 안 읽은 수) + 바뀐 행 노랗게 반짝임 → 서버 상태로 다시 맞춤. 들어옴/나감도 기록
   - 활동 기록은 이 화면을 연 뒤의 것만(메모리), 새로고침하면 비워짐
   - 웹소켓이 끊기면 1·2·4…30초 간격 재연결, 그동안 8초 폴링. 붙어 있어도 30초마다 한 번 맞춤
+  - **접속 중 표시가 빨리 꺼지게**: 화면은 15초마다 ping(`PING_MS`), 탭을 닫거나 다른 주소로 가면(`pagehide`) 바로 닫고, 다른 앱·탭으로 가서 10초 안 보면 닫음(돌아오면 다시 연결)
+  - 방(room.ts)은 ping 에 자동 응답(`setWebSocketAutoResponse`, 방을 깨우지 않음)하고, 접속자가 있는 동안 15초마다 알람으로 점검해서 40초 넘게 ping 이 없는 연결을 닫고 접속자 목록을 다시 보냄
+  - 측정(2026-10-27): 탭 닫기 0.5초, 종료 신호 없이 끊김(폰 꺼짐·앱 강제 종료 흉내) 44.8초. 15초 안에 돌아오면 "들어왔어요" 알림 생략
 - 쓰기: 화면을 먼저 바꾸고 서버에 보낸 뒤 서버 상태로 다시 맞춤(`Room.write` → `refresh(true)`). 동시 수정은 나중 것이 이김. 이동수단·숙소 왕복도 지도 설정으로 공유
 
 ## 의도적으로 뺀 것 (사용자가 제거 요청)
@@ -102,7 +105,7 @@ backend/    Cloudflare Worker (TypeScript)
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest (50개)
+cd backend && npm test          # vitest (52개)
 cd backend && npm run typecheck
 cd backend && npx wrangler d1 migrations apply marker --local   # 로컬 DB 준비
 cd backend && npm run dev       # http://localhost:8787 (카카오 키 없으면 추정값으로 동작)
@@ -132,7 +135,8 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
   - 백엔드: 새 응답이 나오는지 (예: `curl https://marker-api.gygy97.workers.dev/api/maps/ZZZZ/ws` → 426)
 - 화면 확인: 헤드리스 Edge(`msedge --headless=new --remote-debugging-port=...`) + CDP 스크립트. 두 사람은 `Target.createBrowserContext` 로 컨텍스트를 나눠서. 끝나면 `Browser.close` 로 그 창만 닫기 (`taskkill /IM msedge.exe` 금지 — 사용자 브라우저까지 죽음)
 - 실제 사이트에서 테스트로 만든 공유 지도는 제목에 `[테스트]` 를 붙이고, 끝나면 지움:
-  `npx wrangler d1 execute marker --remote --command "DELETE FROM maps WHERE code = 'XXXX'"` (members·markers 는 CASCADE)
+  `npx wrangler d1 execute marker --remote --command "DELETE FROM maps WHERE code = 'XXXX' AND title = '[테스트] …'"` (members·markers 는 CASCADE)
+  - **코드를 정확히 지정해서 하나씩** 지울 것. `LIKE` 같은 범위 삭제는 권한 설정에서 막힘 → 먼저 SELECT 로 남은 테스트 지도 확인
 
 ## 제약사항
 
