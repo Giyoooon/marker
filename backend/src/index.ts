@@ -4,6 +4,7 @@
 //   POST /api/route               마커 순서대로 경로 계산, optimize 면 최단 순서로 정렬 (형식: src/route.ts)
 //   POST /api/leg                 두 지점 사이 한 구간 (화면이 구간마다 동시에 요청). 도로 구간은 6시간 캐시
 //   /api/maps...                  공유 지도 (src/shared.ts)
+//   POST /api/human               사람 확인(Turnstile) → 24시간 통과증 (src/human.ts)
 //   GET  /robots.txt              검색·AI 수집 금지
 // 봇·자동화 대비: 기능별 IP 요청 수 제한, 웹소켓 출처·연결 수 제한 (src/security.ts)
 import { directions, KakaoError, searchKeyword, type Section } from './kakao';
@@ -12,6 +13,7 @@ import * as shared from './shared';
 export { MapRoom } from './room';
 export { Guard } from './guard';
 import type { Env, Place } from './types';
+import { NeedHuman, requireHuman, verifyHuman } from './human';
 import { allowedOrigin, clientIp, limit, NO_INDEX, ROBOTS_TXT, TooMany } from './security';
 import { BadRequest, validateLeg, validateRoute } from './validate';
 
@@ -25,7 +27,7 @@ function corsHeaders(req: Request, env: Env): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Client-Id',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Client-Id, X-Human-Pass',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -73,6 +75,11 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     return json(await routeLeg(validateLeg(await readJson(req)), key ? (a, b) => cachedRoad(key, a, b, ctx) : null));
   }
 
+  if (path === '/api/human' && req.method === 'POST') {
+    await limit(env, 'RL_HUMAN', ip);
+    return json(await verifyHuman(env, await readJson(req), ip));
+  }
+
   if (path === '/api/maps' || path.startsWith('/api/maps/')) {
     try {
       return await handleMaps(req, env, ctx, path, ip);
@@ -96,6 +103,8 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
     : sub0 === 'members' ? 'RL_JOIN'
     : sub0 === 'ws' ? 'RL_WS'
     : m === 'GET' ? 'RL_READ' : 'RL_WRITE', ip);
+  // 만들기·닉네임·모든 변경은 사람 확인 통과증이 있어야 함 (조회는 코드를 알아야 하고 코드 맞히기는 막혀 있어서 열어 둠)
+  if (m !== 'GET') await requireHuman(env, req.headers.get('X-Human-Pass'));
   if (path === '/api/maps' && m === 'POST') return json(await shared.createMap(db, await readJson(req)), 201);
 
   const parts = path.split('/').slice(3);   // [code, sub?, id?]
@@ -137,6 +146,7 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
 async function connectRoom(req: Request, env: Env, code: string, room: DurableObjectStub, ip: string): Promise<Response> {
   if (req.headers.get('Upgrade') !== 'websocket') return json({ error: '웹소켓으로 연결해 주세요' }, 426);
   if (!allowedOrigin(req, env)) return json({ error: '허용되지 않은 출처예요' }, 403);
+  await requireHuman(env, new URL(req.url).searchParams.get('pass'));   // 웹소켓은 헤더를 못 붙여서 주소로
   if (!(await shared.mapExists(env.DB, code))) throw new shared.NotFound('없는 지도 코드예요');
   const target = new URL('https://room/connect');
   target.searchParams.set('ip', ip);
@@ -160,7 +170,8 @@ export default {
       res = await handle(req, env, ctx);
       if (res.status === 101) return res;   // 웹소켓 연결은 그대로 돌려줘야 함 (헤더를 다시 감싸면 연결이 끊김)
     } catch (e) {
-      if (e instanceof TooMany) res = json({ error: e.message }, 429, { 'Retry-After': '60' });
+      if (e instanceof NeedHuman) res = json({ error: e.message, needHuman: true }, 401);
+      else if (e instanceof TooMany) res = json({ error: e.message }, 429, { 'Retry-After': '60' });
       else if (e instanceof BadRequest) res = json({ error: e.message }, 400);
       else if (e instanceof shared.NotFound) res = json({ error: e.message }, 404);
       else if (e instanceof shared.Conflict) res = json({ error: e.message }, 409);

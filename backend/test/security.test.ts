@@ -130,3 +130,40 @@ describe('정확한 요청 수 제한 (Guard)', () => {
     expect(other.status).toBe(404);
   });
 });
+
+describe('사람 확인 통과증 (Turnstile)', () => {
+  const on = () => ({ ...env(), TURNSTILE_SECRET: 's3cret' });
+
+  it('비밀키가 없으면 꺼져 있음 (통과증 없이 지금처럼)', async () => {
+    expect((await call(env(), 'POST', '/api/maps', { title: 't', nickname: 'n' })).status).toBe(201);
+    expect(await (await call(env(), 'POST', '/api/human', { token: 'x' })).json()).toEqual({ pass: null });
+  });
+
+  it('켜져 있으면 만들기·닉네임·변경·웹소켓에 통과증이 필요 (조회는 열려 있음)', async () => {
+    const e = on();
+    const { map, member } = await shared.createMap(e.DB, { title: 't', nickname: 'n' });
+    const r = await call(e, 'POST', '/api/maps', { title: 't', nickname: 'n' });
+    expect(r.status).toBe(401);
+    expect(await r.json()).toMatchObject({ needHuman: true });
+    expect((await call(e, 'POST', `/api/maps/${map.code}/members`, { nickname: 'x' })).status).toBe(401);
+    expect((await call(e, 'POST', `/api/maps/${map.code}/markers`, { memberId: member.id, ...P })).status).toBe(401);
+    expect((await call(e, 'GET', `/api/maps/${map.code}/ws`, undefined, { Upgrade: 'websocket' })).status).toBe(401);
+    expect((await call(e, 'GET', `/api/maps/${map.code}`)).status).toBe(200);
+
+    const { issuePass } = await import('../src/human');
+    const { pass } = await issuePass(e as never);
+    expect((await call(e, 'POST', '/api/maps', { title: 't', nickname: 'n' }, { 'X-Human-Pass': pass })).status).toBe(201);
+    expect((await call(e, 'GET', `/api/maps/${map.code}/ws?pass=${encodeURIComponent(pass)}`, undefined, { Upgrade: 'websocket' })).status).toBe(204);
+  });
+
+  it('위조·만료·다른 키로 만든 통과증은 거부', async () => {
+    const { issuePass, validPass, PASS_TTL_MS } = await import('../src/human');
+    const e = on() as never;
+    const { pass, exp } = await issuePass(e, 1000);
+    expect(await validPass(e, pass, 2000)).toBe(true);
+    expect(await validPass(e, pass, exp + 1)).toBe(false);                                   // 만료
+    expect(await validPass(e, `${exp + PASS_TTL_MS}.${pass.split('.')[1]}`, 2000)).toBe(false); // 만료 시각 늘리기
+    expect(await validPass({ TURNSTILE_SECRET: 'other' } as never, pass, 2000)).toBe(false);   // 다른 키
+    expect(await validPass(e, 'garbage', 2000)).toBe(false);
+  });
+});

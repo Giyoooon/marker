@@ -29,18 +29,23 @@ const Room = (() => {
   }
   const quoted = (name, a, b) => `'${name}'${josa(name, a, b)}`;
 
-  async function call(method, path, body) {
+  async function call(method, path, body, retried = false) {
     pending++;
     try {
+      // 바꾸는 요청엔 화면 id 와 사람 확인 통과증을 붙임 (GET 에 붙이면 매번 사전 요청(OPTIONS)이 하나 더 생김)
+      const pass = method === 'GET' ? null : await Human.pass();
       // 서버가 응답하지 않으면 10초 뒤 포기 (버튼이 "찾는 중…"에 멈춰 있지 않게)
       const res = await fetch(API + path, {
         signal: AbortSignal.timeout(10000),
         method,
-        // 바꾸는 요청에만 화면 id 를 붙임 (GET 에 붙이면 매번 사전 요청(OPTIONS)이 하나 더 생김)
-        headers: method === 'GET' ? undefined : { ...(body ? { 'Content-Type': 'application/json' } : {}), 'X-Client-Id': CLIENT_ID },
+        headers: method === 'GET' ? undefined : {
+          ...(body ? { 'Content-Type': 'application/json' } : {}), 'X-Client-Id': CLIENT_ID, ...(pass ? { 'X-Human-Pass': pass } : {}),
+        },
         body: body ? JSON.stringify(body) : undefined,
       });
       const data = await res.json().catch(() => ({}));
+      // 통과증이 만료·무효면 다시 확인하고 한 번만 다시 보냄
+      if (res.status === 401 && data.needHuman && !retried) { Human.clear(); return call(method, path, body, true); }
       if (!res.ok) { const err = new Error(data.error || `서버 응답 ${res.status}`); err.status = res.status; throw err; }
       return data;
     } catch (e) {
@@ -91,13 +96,21 @@ const Room = (() => {
     if (ws) { ws.onclose = null; try { ws.close(code); } catch {} ws = null; }
     wsOpen = false;
   }
-  function connect() {
+  let wsFails = 0;   // 열리기 전에 끊긴 횟수 (통과증이 거절됐을 수 있음 → 두 번째부터 새로 확인)
+  async function connect() {
     if (!room || leaving) return;
     disconnect();
-    const url = `${API.replace(/^http/, 'ws')}/api/maps/${room.code}/ws${room.me ? `?memberId=${room.me.id}` : ''}`;
+    if (wsFails >= 2) { Human.clear(); wsFails = 0; }
+    let pass;
+    try { pass = await Human.pass(); }
+    catch (e) { toast(e.message); retryTimer = setTimeout(connect, 30000); return; }
+    if (!room || leaving) return;
+    const q = new URLSearchParams({ ...(room.me ? { memberId: room.me.id } : {}), ...(pass ? { pass } : {}) });
+    const url = `${API.replace(/^http/, 'ws')}/api/maps/${room.code}/ws${q.size ? `?${q}` : ''}`;
     const sock = ws = new WebSocket(url);
+    let opened = false;
     sock.onopen = () => {
-      wsOpen = true; retry = 0;
+      wsOpen = true; retry = 0; opened = true; wsFails = 0;
       clearInterval(pingTimer);
       pingTimer = setInterval(() => sock.readyState === 1 && sock.send('ping'), PING_MS);
       // 끊겨 있던 동안 바뀐 것 맞추기. 들어오자마자 처음 연결할 땐 방금 불러왔으니 건너뜀
@@ -112,6 +125,7 @@ const Room = (() => {
     };
     sock.onclose = () => {
       wsOpen = false;
+      if (!opened) wsFails++;
       clearInterval(pingTimer);
       room.online = null;   // 모르면 표시하지 않음
       renderBar();

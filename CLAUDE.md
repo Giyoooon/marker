@@ -89,6 +89,7 @@
 frontend/   정적 페이지, 빌드 없음
   index.html  화면 뼈대 (#dlg 대화창 하나를 모든 창이 같이 씀)
   map.js      카카오맵 SDK 래퍼(KMap). app.js·room.js 는 지도 API 를 직접 부르지 않고 이것만 씀
+  human.js    사람 확인(Turnstile) → 통과증 (room.js 가 변경·웹소켓 전에 씀)
   room.js     공유 지도(Room): 첫 화면·번호 공유·닉네임·웹소켓(접속자, 변경 알림)·서버 동기화
   app.js      상태·목록·경로·이벤트. 데이터가 바뀌는 지점마다 Room.* 를 부름. 경로 계산·검색은 백엔드
   sheet.js    모바일 바텀시트 (목록 패널 높이 접기·반·펼치기, 지도에 가린 높이 알림)
@@ -100,6 +101,7 @@ backend/    Cloudflare Worker (TypeScript)
   room.ts     지도 방 Durable Object (웹소켓 Hibernation API). presenceOf·admitError 는 순수 함수
   security.ts 봇 대비: 요청 수 제한(바인딩+Guard), 웹소켓 출처·연결 수, robots
   guard.ts    IP 마다 정확한 요청 수 제한 Durable Object
+  human.ts    사람 확인(Turnstile) → 24시간 통과증
   route.ts    경로 계산: routeLeg(한 구간, /api/leg), route(순서 최적화·왕복, orderOnly 면 순서만)
   order.ts    방문 순서 최적화 (최근접 이웃 + 2-opt + or-opt, 순수 함수)
   matrix.ts   이동시간 행렬 (카카오 다중 목적지 / 직선거리 추정)
@@ -112,7 +114,7 @@ backend/    Cloudflare Worker (TypeScript)
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest (67개)
+cd backend && npm test          # vitest (70개)
 cd backend && npm run typecheck
 cd backend && npx wrangler d1 migrations apply marker --local   # 로컬 DB 준비
 cd backend && npm run dev       # http://localhost:8787 (카카오 키 없으면 추정값으로 동작)
@@ -185,7 +187,13 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
   - 같은 와이파이(같은 IP)를 쓰는 친구들은 한도를 같이 씀 — 한도를 낮출 땐 주의
 - **웹소켓**: 허용된 출처(ALLOWED_ORIGINS)만, **Origin 이 없으면 거부**(봇·스크립트). 지도 방 한 곳당 전체 60·같은 IP 8·구경 30 연결까지(`ROOM_LIMITS`, 넘으면 연결 전에 429). ping 이 아닌 메시지는 연결을 끊음(1008)
 - **AI·검색 수집 금지**: API `/robots.txt`(Disallow: /), 모든 API 응답 `X-Robots-Tag: noindex, nofollow, noarchive, noai, noimageai`, 페이지 `<meta name="robots" …noai>`. GitHub Pages 의 /marker/robots.txt 는 크롤러가 안 읽으므로(도메인 루트만 읽음) 페이지는 meta 로
-- 남은 위험: Origin·User-Agent 는 봇이 흉내낼 수 있음. 더 막으려면 만들기·들어가기에 Cloudflare Turnstile(사람 확인) — 대시보드에서 키 발급 필요
+- **사람 확인 (Cloudflare Turnstile, src/human.ts · frontend/human.js)**: 공유 지도의 만들기·닉네임·모든 변경·웹소켓 연결은 24시간짜리 통과증이 필요 (조회·검색·경로는 필요 없음)
+  - 화면이 Turnstile(대부분 자동 통과, 의심스러우면 아래에 체크 상자) → `POST /api/human {token}` → 통과증 `<만료ms>.<HMAC>` (서명 키는 TURNSTILE_SECRET 에서 만듦, IP 안 묶음) → localStorage `marker-human-pass`
+  - 보낼 때: 변경은 `X-Human-Pass` 헤더, 웹소켓은 `?pass=`. 없거나 만료면 401 `{needHuman:true}` → 화면이 다시 확인하고 한 번 더 보냄. 웹소켓이 열리기 전에 두 번 끊기면 통과증을 새로 받음
+  - 켜기: Cloudflare 대시보드 > Turnstile 위젯(도메인 giyoooon.github.io) → 비밀키는 Worker 비밀값 `TURNSTILE_SECRET`, 사이트 키는 GitHub 저장소 변수 `TURNSTILE_SITE_KEY`(pages.yml 이 config.js 에 넣음). **둘 다 넣어야 함** — 비밀키만 있으면 화면이 통과증을 못 받아 공유 지도 변경이 다 막힘. 둘 다 없으면 꺼짐
+  - Turnstile 이 돌려준 hostname 이 ALLOWED_ORIGINS 도메인인지도 확인. 로컬 시험은 Cloudflare 시험용 키(사이트 1x00000000000000000000AA / 비밀 1x0000000000000000000000000000000AA, 항상 통과·hostname 검사 건너뜀)
+  - /api/human 은 Guard 로 IP 마다 10/분
+- 남은 위험: Origin·User-Agent 는 흉내낼 수 있지만 변경·웹소켓은 통과증이 있어야 함. 통과증 하나를 봇이 24시간 돌려쓰는 건 요청 수 제한이 막음
 
 ### 프론트
 - 빌드 도구·프레임워크 없음. 순수 HTML/CSS/JS 유지 (room.js 가 app.js 보다 먼저 로드, 서로의 전역을 호출 시점에 씀)

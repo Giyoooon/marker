@@ -15,4 +15,6 @@ export interface Env {
   RL_CREATE?: RateLimit; RL_JOIN?: RateLimit; RL_SEARCH?: RateLimit; RL_ROUTE?: RateLimit;
   /** IP 마다 하나인 정확한 요청 수 제한 (src/guard.ts). 없으면 건너뜀 */
   GUARD?: DurableObjectNamespace;
+  /** Cloudflare Turnstile 비밀키 (wrangler secret). 없으면 사람 확인을 하지 않음 (src/human.ts) */
+  TURNSTILE_SECRET?: string;
 }

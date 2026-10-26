@@ -337,3 +337,14 @@ dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor;
   .in-room header { padding-top: 2px; }
   .in-room #roomBar { margin-top: 0; }
 }
+
+/* 사람 확인 (human.js): 확인이 필요할 때만 화면 아래에 뜨는 상자 */
+.human-check {
+  position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); z-index: 1000;
+  transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
+  background: #fff; border-radius: 14px; padding: 14px 16px 12px;
+  box-shadow: 0 10px 30px rgba(30, 42, 68, .22); transition: opacity .18s, transform .18s;
+}
+.human-check.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.human-check p { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: #1E2A44; }
+@media (prefers-reduced-motion: reduce) { .human-check { transition: none; } }

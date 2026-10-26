@@ -7,10 +7,10 @@ import type { Env } from './types';
 
 export class TooMany extends Error {}
 
-export type Limiter = 'RL_WS' | 'RL_MISS' | 'RL_READ' | 'RL_WRITE' | 'RL_CREATE' | 'RL_JOIN' | 'RL_SEARCH' | 'RL_ROUTE';
+export type Limiter = 'RL_WS' | 'RL_MISS' | 'RL_READ' | 'RL_WRITE' | 'RL_CREATE' | 'RL_JOIN' | 'RL_SEARCH' | 'RL_ROUTE' | 'RL_HUMAN';
 
 /** Guard 로 정확히 세는 것: 분당 한도 (wrangler.toml 의 같은 이름 바인딩과 맞출 것) */
-export const EXACT: Partial<Record<Limiter, number>> = { RL_MISS: 10, RL_WS: 20, RL_CREATE: 3, RL_JOIN: 10 };
+export const EXACT: Partial<Record<Limiter, number>> = { RL_MISS: 10, RL_WS: 20, RL_CREATE: 3, RL_JOIN: 10, RL_HUMAN: 10 };
 
 /** 요청한 쪽 IP. Cloudflare 가 붙여 주는 헤더라 클라이언트가 바꿀 수 없음 */
 export const clientIp = (req: Request) => req.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -19,7 +19,7 @@ const tooMany = () => new TooMany('요청이 너무 많아요. 잠시 뒤 다시
 
 /** 한도를 넘었으면 TooMany (→ 429). 같은 IP 라도 기능마다 따로 셈 */
 export async function limit(env: Env, name: Limiter, key: string): Promise<void> {
-  const rl = env[name];
+  const rl = name === 'RL_HUMAN' ? undefined : env[name];   // RL_HUMAN 은 Guard 로만 셈
   if (rl && !(await rl.limit({ key })).success) throw tooMany();
   const exact = EXACT[name];
   if (exact && env.GUARD) {
