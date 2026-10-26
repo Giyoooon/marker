@@ -340,6 +340,7 @@ dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor;
 
 /* 사람 확인 (human.js): 확인이 필요할 때만 화면 아래에 뜨는 상자 */
 .human-check {
+  inset: auto; margin: 0; border: 0; overflow: visible;   /* popover 기본 모양 지움 */
   position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); z-index: 1000;
   transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
   background: #fff; border-radius: 14px; padding: 14px 16px 12px;

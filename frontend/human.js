@@ -35,12 +35,16 @@ const Human = (() => {
     box.className = 'human-check';
     box.innerHTML = '<p>사람인지 한 번만 확인할게요</p><div class="human-widget"></div>';
     document.body.append(box);
+    // 첫 화면·만들기 창(모달 dialog)은 맨 위 층(top layer)에 떠서 그냥 붙이면 어두운 배경 밑에 깔려 못 누름
+    // → popover 로 같은 층에 올림 (보이기 전엔 투명·클릭 통과)
+    if (box.showPopover) { box.popover = 'manual'; box.showPopover(); }
     try {
       return await new Promise((resolve, reject) => {
         const id = ts.render(box.querySelector('.human-widget'), {
           sitekey: SITE_KEY,
           appearance: 'interaction-only',
           language: 'ko',
+          theme: 'light',
           action: 'marker',
           'before-interactive-callback': () => box.classList.add('show'),
           'after-interactive-callback': () => box.classList.remove('show'),
