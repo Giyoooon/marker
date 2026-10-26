@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import worker from '../src/index';
-import { MapRoom, presenceOf, type Attachment } from '../src/room';
+import { MapRoom, presenceOf, STALE_MS, SWEEP_MS, type Attachment } from '../src/room';
 import * as shared from '../src/shared';
 import { fakeD1 } from './fake-d1';
 
@@ -126,7 +126,7 @@ describe('지도 방 (접속자 목록, 알림 전달)', () => {
   });
 
   it('알림은 접속한 모두에게, 연결이 끊기면 남은 사람에게 바뀐 접속자 목록을 보낸다', async () => {
-    const mk = (a: Attachment) => ({ sent: [] as string[], send(t: string) { this.sent.push(t); }, deserializeAttachment: () => a });
+    const mk = (a: Attachment) => ({ sent: [] as string[], closed: null as number | null, send(t: string) { this.sent.push(t); }, close(code: number) { this.closed = code; }, deserializeAttachment: () => a });
     const jiyun = mk(att('1', [1, '지윤'], 'a')), minsu = mk(att('2', [2, '민수'], 'b'));
     const sockets = [jiyun, minsu];
     const room = new MapRoom({ getWebSockets: () => sockets } as never, {} as never);
@@ -136,9 +136,44 @@ describe('지도 방 (접속자 목록, 알림 전달)', () => {
     expect(jiyun.sent.map(s => JSON.parse(s).action)).toEqual(['order']);
     expect(minsu.sent.map(s => JSON.parse(s).action)).toEqual(['order']);
 
-    await room.webSocketClose(minsu as never);
+    await room.webSocketClose(minsu as never, 1005, '');
+    expect(minsu.closed).toBe(1000);   // 닫힘 신호에 답해서 바로 정리
     const last = JSON.parse(jiyun.sent.at(-1)!);
     expect(last).toMatchObject({ type: 'presence', online: [{ nickname: '지윤' }], viewers: 0 });
     expect(minsu.sent).toHaveLength(1);   // 끊긴 연결엔 보내지 않음
+  });
+
+  it('종료 신호 없이 끊긴 연결(40초 넘게 ping 없음)은 점검 때 닫고 접속자 목록에서 뺀다', async () => {
+    const now = Date.now();
+    const mk = (a: Attachment, pingedAgo: number | null) => ({
+      a, pingedAgo, sent: [] as string[], closed: null as number | null,
+      send(t: string) { this.sent.push(t); }, close(code: number) { this.closed = code; }, deserializeAttachment() { return this.a; },
+    });
+    const jiyun = mk(att('1', [1, '지윤'], new Date(now - 300_000).toISOString()), 5_000);     // 5초 전 ping → 살아 있음
+    const minsu = mk(att('2', [2, '민수'], new Date(now - 300_000).toISOString()), STALE_MS + 5_000);   // 오래전 ping → 나감
+    const viewer = mk(att('3', null, new Date(now - 10_000).toISOString()), null);              // 방금 접속, 아직 ping 전 → 살아 있음
+    const sockets = [jiyun, minsu, viewer];
+    let alarm: number | null = null;
+    const ctx = {
+      getWebSockets: () => sockets,
+      getWebSocketAutoResponseTimestamp: (ws: typeof jiyun) => (ws.pingedAgo == null ? null : new Date(now - ws.pingedAgo)),
+      storage: { getAlarm: async () => alarm, setAlarm: async (t: number) => { alarm = t; } },
+    };
+    const room = new MapRoom(ctx as never, {} as never);
+    await room.alarm();
+
+    expect(minsu.closed).toBe(4000);
+    expect(jiyun.closed).toBeNull();
+    const p = JSON.parse(jiyun.sent.at(-1)!);
+    expect(p).toMatchObject({ type: 'presence', online: [{ nickname: '지윤' }], viewers: 1 });
+    expect(minsu.sent).toHaveLength(0);
+    expect(alarm).toBeGreaterThanOrEqual(now + SWEEP_MS);   // 남은 사람이 있으니 다음 점검 예약
+  });
+
+  it('아무도 안 남으면 더 점검하지 않는다', async () => {
+    let alarm: number | null = null;
+    const room = new MapRoom({ getWebSockets: () => [], storage: { getAlarm: async () => alarm, setAlarm: async (t: number) => { alarm = t; } } } as never, {} as never);
+    await room.alarm();
+    expect(alarm).toBeNull();
   });
 });

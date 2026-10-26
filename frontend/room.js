@@ -77,17 +77,26 @@ const Room = (() => {
   }
 
   // ───────── 웹소켓: 접속자와 바로바로 변경 알림 ─────────
-  let ws = null, wsOpen = false, retry = 0, retryTimer = null, pingTimer = null;
-  function connect() {
-    if (!room) return;
+  // 접속 중 표시가 늦게 꺼지지 않게: 페이지를 떠나면 바로 닫고, 안 보고 있으면 잠시 뒤 닫고,
+  // 살아 있다는 신호(ping)를 자주 보냄 → 신호가 끊긴 연결은 서버(room.ts)가 40초 안에 정리
+  const PING_MS = 15000;          // backend/src/room.ts PING_MS 와 맞출 것
+  const HIDDEN_CLOSE_MS = 10000;  // 다른 앱·탭으로 가서 이만큼 안 보면 연결을 닫음 (돌아오면 다시 연결)
+  let ws = null, wsOpen = false, retry = 0, retryTimer = null, pingTimer = null, hiddenTimer = null, leaving = false;
+  function disconnect(code = 1000) {
     clearTimeout(retryTimer);
-    if (ws) { ws.onclose = null; ws.close(); }
+    clearInterval(pingTimer);
+    if (ws) { ws.onclose = null; try { ws.close(code); } catch {} ws = null; }
+    wsOpen = false;
+  }
+  function connect() {
+    if (!room || leaving) return;
+    disconnect();
     const url = `${API.replace(/^http/, 'ws')}/api/maps/${room.code}/ws${room.me ? `?memberId=${room.me.id}` : ''}`;
     const sock = ws = new WebSocket(url);
     sock.onopen = () => {
       wsOpen = true; retry = 0;
       clearInterval(pingTimer);
-      pingTimer = setInterval(() => sock.readyState === 1 && sock.send('ping'), 25000);
+      pingTimer = setInterval(() => sock.readyState === 1 && sock.send('ping'), PING_MS);
       refresh(true);   // 끊겨 있던 동안 바뀐 것 맞추기
     };
     sock.onmessage = e => {
@@ -102,22 +111,35 @@ const Room = (() => {
       clearInterval(pingTimer);
       room.online = null;   // 모르면 표시하지 않음
       renderBar();
-      // 1, 2, 4, 8 … 최대 30초 뒤 다시 연결
-      retryTimer = setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++));
+      // 1, 2, 4, 8 … 최대 30초 뒤 다시 연결. 안 보고 있는 동안엔 연결하지 않음 (돌아오면 바로 연결)
+      if (!document.hidden && !leaving) retryTimer = setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++));
     };
   }
+  // 페이지를 떠날 땐(탭 닫기, 다른 주소로 이동) 바로 닫아서 다른 사람 화면에서 곧장 나감으로 보이게
+  window.addEventListener('pagehide', () => { leaving = true; disconnect(); });
+  window.addEventListener('pageshow', e => { if (e.persisted && room) { leaving = false; connect(); } });   // 뒤로 가기로 돌아온 경우
+  document.addEventListener('visibilitychange', () => {
+    if (!room) return;
+    clearTimeout(hiddenTimer);
+    if (document.hidden) hiddenTimer = setTimeout(() => disconnect(), HIDDEN_CLOSE_MS);
+    else if (!wsOpen) connect();   // 연결하면서 서버 상태도 맞춤 (onopen → refresh)
+  });
 
+  const leftAt = new Map();   // 사람 id → 마지막으로 나간 시각
   function onPresence(p) {
     const before = room.online ? new Set(room.online.map(o => o.id)) : null;
     room.online = p.online;
     room.viewers = p.viewers;
     if (before) {   // 처음 받은 목록은 알리지 않음
       for (const o of p.online) {
-        if (!before.has(o.id) && o.id !== room.me?.id) note(`${o.nickname} 님이 들어왔어요`, o);
+        // 잠깐 다른 앱을 보다 돌아온 경우(나간 지 15초 안)는 '들어왔어요'를 알리지 않음
+        const quickReturn = Date.now() - (leftAt.get(o.id) ?? 0) < 15000;
+        if (!before.has(o.id) && o.id !== room.me?.id && !quickReturn) note(`${o.nickname} 님이 들어왔어요`, o);
       }
       const now = new Set(p.online.map(o => o.id));
       for (const id of before) {
         if (!now.has(id) && id !== room.me?.id) {
+          leftAt.set(id, Date.now());
           const m = room.members.find(x => x.id === id);
           if (m) note(`${m.nickname} 님이 나갔어요`, m, { quiet: true });
         }
@@ -187,7 +209,7 @@ const Room = (() => {
     lastSync = Date.now();
     connect();
     setInterval(() => { if (Date.now() - lastSync >= (wsOpen ? POLL_WITH_WS_MS : POLL_MS) - 500) refresh(); }, POLL_MS);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    // 화면으로 돌아왔을 때의 다시 연결·맞추기는 위 visibilitychange 처리에서
     // 방금 만든 지도면 번호부터 보여 줌, 닉네임이 없으면 닉네임부터
     if (sessionStorage.getItem('marker-created') === code) { sessionStorage.removeItem('marker-created'); openShare(true); }
     else if (!room.me) askNickname();

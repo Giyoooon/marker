@@ -29,18 +29,49 @@ export function presenceOf(conns: Attachment[]): Presence {
   return { type: 'presence', online: [...byId.values()].sort((a, b) => a.since.localeCompare(b.since)), viewers };
 }
 
+/** 화면이 이 간격으로 'ping' 을 보냄 (room.js 와 맞출 것) */
+export const PING_MS = 15_000;
+/** 마지막 ping 뒤 이만큼 지나면 나간 것으로 봄 (화면을 끄거나 앱을 강제로 닫아서 종료 신호 없이 끊긴 경우) */
+export const STALE_MS = 40_000;
+/** 접속자가 있는 동안 이 간격으로 오래된 연결을 정리 */
+export const SWEEP_MS = 15_000;
+
 export class MapRoom extends DurableObject<Env> {
+  /** 방금 정리해서 닫았지만 아직 getWebSockets() 에 남아 있을 수 있는 연결 */
+  private closing = new Set<WebSocket>();
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // 'ping' 에는 방을 깨우지 않고 런타임이 바로 'pong' 으로 답함. 마지막으로 답한 시각은 연결마다 기록됨
+    if (typeof WebSocketRequestResponsePair !== 'undefined') {
+      this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    }
+  }
+
+  private live(except?: WebSocket): WebSocket[] {
+    return this.ctx.getWebSockets().filter(ws => ws !== except && !this.closing.has(ws));
+  }
   private conns(except?: WebSocket): Attachment[] {
-    return this.ctx.getWebSockets().filter(ws => ws !== except).map(ws => ws.deserializeAttachment() as Attachment).filter(Boolean);
+    return this.live(except).map(ws => ws.deserializeAttachment() as Attachment).filter(Boolean);
   }
   private send(data: unknown, except?: WebSocket) {
     const text = JSON.stringify(data);
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws === except) continue;
+    for (const ws of this.live(except)) {
       try { ws.send(text); } catch { /* 이미 끊긴 연결 */ }
     }
   }
   private sendPresence(except?: WebSocket) { this.send(presenceOf(this.conns(except)), except); }
+
+  /** 연결의 마지막 생존 신호 시각: 마지막 ping 자동 응답, 아직 없으면 접속 시각 */
+  private lastSeen(ws: WebSocket): number {
+    const pinged = this.ctx.getWebSocketAutoResponseTimestamp?.(ws);
+    if (pinged) return pinged.getTime();
+    const a = ws.deserializeAttachment() as Attachment | null;
+    return a ? Date.parse(a.since) : 0;
+  }
+  private async scheduleSweep() {
+    if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS);
+  }
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -62,13 +93,33 @@ export class MapRoom extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(attachment);
     this.sendPresence();
+    await this.scheduleSweep();
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** 오래 신호가 없는 연결을 닫고 남은 사람들에게 바뀐 접속자 목록을 보냄. 접속자가 남아 있으면 다음 점검 예약 */
+  async alarm() {
+    const now = Date.now();
+    const stale = this.live().filter(ws => now - this.lastSeen(ws) > STALE_MS);
+    for (const ws of stale) {
+      this.closing.add(ws);
+      try { ws.close(4000, '응답 없음'); } catch { /* 이미 끊김 */ }
+    }
+    if (stale.length) this.sendPresence();
+    if (this.live().length) await this.ctx.storage.setAlarm(now + SWEEP_MS);
+  }
+
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    // 연결 유지용 ping 에만 답함. 변경은 반드시 HTTP API 로 (누가 했는지 D1 에서 확인하려고)
+    // 보통 'ping' 은 자동 응답이 처리함. 변경은 반드시 HTTP API 로 (누가 했는지 D1 에서 확인하려고)
     if (message === 'ping') ws.send('pong');
   }
-  async webSocketClose(ws: WebSocket) { this.sendPresence(ws); }
-  async webSocketError(ws: WebSocket) { this.sendPresence(ws); }
+  async webSocketClose(ws: WebSocket, code: number, reason: string) {
+    this.closing.add(ws);
+    try { ws.close(code === 1005 ? 1000 : code, reason); } catch { /* 이미 닫힘 */ }   // 닫힘에 답해야 연결이 바로 정리됨
+    this.sendPresence(ws);
+  }
+  async webSocketError(ws: WebSocket) {
+    this.closing.add(ws);
+    this.sendPresence(ws);
+  }
 }
