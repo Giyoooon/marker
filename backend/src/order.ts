@@ -1,13 +1,13 @@
 // 방문 순서 최적화 (외부 의존성 없는 순수 함수)
-// 0번(출발지)은 고정하고, 나머지를 들르는 열린 경로의 총 비용이 최소가 되도록
+// 0번(출발지)은 고정하고, 나머지를 들르는 경로(roundTrip 이면 0번으로 돌아오는 것까지)의 총 비용이 최소가 되도록
 // 최근접 이웃으로 시작한 뒤 2-opt 와 단일 이동(or-opt)으로 개선
 
 export type Cost = (i: number, j: number) => number;
 
-const pathCost = (order: number[], cost: Cost) => {
+const pathCost = (order: number[], cost: Cost, roundTrip: boolean) => {
   let sum = 0;
   for (let k = 1; k < order.length; k++) sum += cost(order[k - 1], order[k]);
-  return sum;
+  return roundTrip ? sum + cost(order[order.length - 1], order[0]) : sum;
 };
 
 function nearestNeighbor(n: number, cost: Cost): number[] {
@@ -23,17 +23,17 @@ function nearestNeighbor(n: number, cost: Cost): number[] {
   return order;
 }
 
-export function bestOrder(n: number, cost: Cost): number[] {
+export function bestOrder(n: number, cost: Cost, roundTrip = false): number[] {
   if (n <= 2) return Array.from({ length: n }, (_, i) => i);
   let order = nearestNeighbor(n, cost);
-  let best = pathCost(order, cost);
+  let best = pathCost(order, cost, roundTrip);
   for (let pass = 0; pass < 100; pass++) {
     let improved = false;
     // 2-opt: order[i..j] 구간 뒤집기 (비대칭 비용이라 전체 비용으로 비교)
     for (let i = 1; i < n - 1; i++) {
       for (let j = i + 1; j < n; j++) {
         const cand = [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)];
-        const c = pathCost(cand, cost);
+        const c = pathCost(cand, cost, roundTrip);
         if (c < best - 1e-9) { order = cand; best = c; improved = true; }
       }
     }
@@ -44,7 +44,7 @@ export function bestOrder(n: number, cost: Cost): number[] {
         const cand = order.slice();
         const [x] = cand.splice(i, 1);
         cand.splice(j, 0, x);
-        const c = pathCost(cand, cost);
+        const c = pathCost(cand, cost, roundTrip);
         if (c < best - 1e-9) { order = cand; best = c; improved = true; }
       }
     }

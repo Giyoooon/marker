@@ -1,15 +1,16 @@
 // /api/route: 마커 순서대로 경로 계산. optimize 면 첫 마커를 출발지로 고정하고 최단 순서로 바꾼 뒤 계산
+// roundTrip 이면 마지막에 첫 마커(예: 숙소)로 돌아오는 구간까지 포함
 import { estimateLeg, haversineKm } from './geo';
 import { errMsg, waypointsRoute } from './kakao';
 import { estimateMatrix, kakaoMatrix } from './matrix';
 import { bestOrder } from './order';
 import type { Env, Mode, Place } from './types';
 
-export interface RouteRequest { mode: Mode; points: Place[]; optimize?: boolean }
+export interface RouteRequest { mode: Mode; points: Place[]; optimize?: boolean; roundTrip?: boolean }
 export interface RouteLeg { min: number; km: number; walk: boolean }
 export interface RouteResponse {
   source: 'kakao' | 'estimate';
-  /** 응답 경로의 마커 순서 (요청 points 의 인덱스). optimize 가 아니면 0..n-1 그대로 */
+  /** 응답 경로의 마커 순서 (요청 points 의 인덱스, 복귀 지점 제외). optimize 가 아니면 0..n-1 그대로 */
   order: number[];
   legs: RouteLeg[];
   totalMin: number;
@@ -34,9 +35,10 @@ export async function route(req: RouteRequest, env: Env): Promise<RouteResponse>
       try { M = await kakaoMatrix(key, req.points); }
       catch (e) { warnings.push(`실제 이동시간을 못 불러와 직선거리 기준으로 정렬했어요(${errMsg(e)}).`); }
     }
-    order = bestOrder(req.points.length, (i, j) => M[i][j]);
+    order = bestOrder(req.points.length, (i, j) => M[i][j], req.roundTrip);
   }
-  const points = order.map(i => req.points[i]);
+  // legs 는 points 순서대로. roundTrip 이면 마지막 legs 가 첫 마커로 돌아오는 구간
+  const points = [...order, ...(req.roundTrip ? [order[0]] : [])].map(i => req.points[i]);
   const same = points.map((p, i) => i > 0 && haversineKm(points[i - 1], p) < SAME_SPOT_KM);
 
   // legs[i] = points[i] → points[i+1]. 기본값은 직선거리 기반 추정

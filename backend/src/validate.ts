@@ -39,5 +39,8 @@ export function validateRoute(body: unknown): RouteRequest {
   if (body.points.length > MAX_POINTS) fail(`points: 최대 ${MAX_POINTS}개까지 가능해요`);
   const points = body.points.map((p, i) => place(p, `points[${i}]`));
   if (points.length < 2) fail('points: 최소 2곳이 필요해요');
-  return { mode: mode(body.mode), points, optimize: body.optimize === true };
+  const roundTrip = body.roundTrip === true;
+  // 왕복이면 출발지로 돌아오는 지점이 하나 더 붙음
+  if (roundTrip && points.length > MAX_POINTS - 1) fail(`points: 왕복은 최대 ${MAX_POINTS - 1}개까지 가능해요`);
+  return { mode: mode(body.mode), points, optimize: body.optimize === true, roundTrip };
 }

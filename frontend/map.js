@@ -26,21 +26,28 @@ const KMap = (() => {
     window.addEventListener('resize', () => map.relayout());
   }
 
-  function pin(layer, { lat, lng, color, label = '', size = 22, title = '', z = 1, onClick }) {
+  /**
+   * drop: 끝이 좌표를 가리키는 물방울 핀 (회전한 정사각형이라 끝이 높이의 약 1.21배 지점에 옴)
+   * 아니면 좌표 중심에 놓이는 동그라미
+   */
+  function pin(layer, { lat, lng, color, label = '', size = 22, title = '', z = 1, onClick, drop = false, cls = '' }) {
     const el = document.createElement('div');
-    el.className = 'pin';
-    Object.assign(el.style, { width: size + 'px', height: size + 'px', background: color, cursor: onClick ? 'pointer' : 'default' });
-    el.textContent = label;
+    el.className = (drop ? 'drop' : 'pin') + (cls ? ' ' + cls : '');
+    el.style.setProperty('--c', color);
+    Object.assign(el.style, { width: size + 'px', height: size + 'px', cursor: onClick ? 'pointer' : 'default' });
+    const text = document.createElement('span');
+    text.textContent = label;
+    el.appendChild(text);
     el.title = title;
     if (onClick) el.addEventListener('click', e => { e.stopPropagation(); onClick(); });
-    const ov = new kakao.maps.CustomOverlay({ position: LL(lat, lng), content: el, xAnchor: 0.5, yAnchor: 0.5, zIndex: z, clickable: true });
+    const ov = new kakao.maps.CustomOverlay({ position: LL(lat, lng), content: el, xAnchor: 0.5, yAnchor: drop ? 1.21 : 0.5, zIndex: z, clickable: true });
     show(ov, layer);
     layers[layer].push(ov);
   }
 
-  function line(layer, path, color, dashed) {
-    const pl = new kakao.maps.Polyline({ path: path.map(([lat, lng]) => LL(lat, lng)), strokeWeight: 5, strokeColor: color,
-      strokeOpacity: 0.85, strokeStyle: dashed ? 'shortdash' : 'solid' });
+  function line(layer, path, color, { dashed = false, weight = 5, opacity = 0.9 } = {}) {
+    const pl = new kakao.maps.Polyline({ path: path.map(([lat, lng]) => LL(lat, lng)), strokeWeight: weight, strokeColor: color,
+      strokeOpacity: opacity, strokeStyle: dashed ? 'shortdash' : 'solid' });
     show(pl, layer);
     layers[layer].push(pl);
   }

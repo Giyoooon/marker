@@ -81,6 +81,28 @@ describe('route optimize', () => {
   });
 });
 
+describe('route roundTrip (숙소 출발·복귀)', () => {
+  it('마지막에 첫 마커로 돌아오는 구간이 붙는다', async () => {
+    const res = await route({ mode: 'walk', roundTrip: true, points: [A, B, C] }, {});
+    expect(res.order).toEqual([0, 1, 2]);
+    expect(res.legs).toHaveLength(3);
+    expect(res.legs[2].km).toBeGreaterThan(0);   // 수성못 → 동대구역
+  });
+
+  it('최단 정렬도 돌아오는 길까지 포함해서 계산한다', async () => {
+    // 일직선: 숙소(0) 오른쪽에 1, 2, 3 이 순서대로 있을 때 왕복이면 1→2→3 또는 3→2→1 이 같음
+    const P = (lng: number) => ({ name: String(lng), lat: 35.8, lng });
+    const res = await route({ mode: 'walk', roundTrip: true, optimize: true, points: [P(128.5), P(128.53), P(128.51), P(128.52)] }, {});
+    expect(res.order[0]).toBe(0);
+    expect([[0, 2, 3, 1], [0, 1, 3, 2]]).toContainEqual(res.order);
+  });
+
+  it('왕복은 31곳까지만 받는다', () => {
+    expect(() => validateRoute({ roundTrip: true, points: Array(32).fill(A) })).toThrow(/왕복은 최대 31개/);
+    expect(validateRoute({ roundTrip: true, points: [A, B] }).roundTrip).toBe(true);
+  });
+});
+
 describe('validateRoute', () => {
   it('2곳 미만, 32곳 초과, 잘못된 좌표를 거른다', () => {
     expect(() => validateRoute({ points: [A] })).toThrow(/최소 2곳/);

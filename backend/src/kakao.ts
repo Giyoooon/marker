@@ -21,7 +21,8 @@ async function call<T>(url: string, key: string, body?: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export interface SearchResult extends Place { id: string; addr: string; category: string; url: string }
+// group: 카카오 카테고리 그룹 코드 (AD5 숙박, FD6 음식점, CE7 카페, AT4 관광명소, CT1 문화시설 등)
+export interface SearchResult extends Place { id: string; addr: string; category: string; group: string; url: string }
 
 export async function searchKeyword(key: string, query: string, near?: { lat: number; lng: number }): Promise<SearchResult[]> {
   const q = new URLSearchParams({ query, size: '10' });
@@ -32,6 +33,7 @@ export async function searchKeyword(key: string, query: string, near?: { lat: nu
     name: d.place_name,
     addr: d.road_address_name || d.address_name,
     category: d.category_name?.split(' > ').pop() ?? '',
+    group: d.category_group_code ?? '',
     url: d.place_url,
     lat: Number(d.y),
     lng: Number(d.x),

@@ -37,3 +37,14 @@ describe('bestOrder', () => {
     expect(bestOrder(3, (i, j) => c[i][j])).toEqual([0, 2, 1]);
   });
 });
+
+describe('bestOrder roundTrip', () => {
+  it('돌아오는 비용까지 포함해서 최소화한다', () => {
+    // 0 에서 1 은 가깝지만 1 에서 0 으로 돌아오기는 비쌈 → 왕복이면 1 을 먼저 들르는 게 유리
+    const c = [[0, 1, 5], [50, 0, 1], [1, 5, 0]];
+    expect(bestOrder(3, (i, j) => c[i][j])).toEqual([0, 1, 2]);
+    expect(bestOrder(3, (i, j) => c[i][j], true)).toEqual([0, 1, 2]);
+    const d = [[0, 1, 5], [1, 0, 1], [50, 5, 0]];   // 2 에서 0 으로 돌아오기가 비쌈
+    expect(bestOrder(3, (i, j) => d[i][j], true)).toEqual([0, 2, 1]);
+  });
+});

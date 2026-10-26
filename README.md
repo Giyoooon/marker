@@ -1,6 +1,6 @@
 # 📍 마커 — 찍고, 순서 정하고, 경로 보기
 
-장소를 검색하거나 지도를 클릭해서 마킹하고, 끌어서 놓기나 ▲▼ 버튼으로 순서를 정하면
+장소를 검색하거나 지도를 클릭해서 마킹하고(숙소·맛집·카페·명소·기타로 분류, 체크로 경로 포함 여부 선택), 끌어서 놓기나 ▲▼ 버튼으로 순서를 정하면
 그 순서대로 지도에 경로를 그려 줌. **✨ 최단 순서로 정렬**은 첫 마커를 출발지로 두고 나머지를 이동시간이 가장 짧은 순서로 바꿈.
 
 ```
@@ -14,7 +14,7 @@ backend/   API (Cloudflare Workers, TypeScript) → 카카오 장소 검색, 카
 | --- | --- | --- |
 | GET | `/api/health` | 상태, 카카오 키 설정 여부 |
 | GET | `/api/search?q=&lat=&lng=` | 카카오 키워드 장소 검색 (lat/lng 근처 우선) |
-| POST | `/api/route` | 마커 순서대로 구간별 시간·거리와 도로 경로 좌표. `optimize: true` 면 최단 순서로 정렬 (형식: `backend/src/route.ts`) |
+| POST | `/api/route` | 마커 순서대로 구간별 시간·거리와 도로 경로 좌표. `optimize: true` 면 최단 순서로 정렬, `roundTrip: true` 면 첫 마커(숙소)로 돌아오는 구간 포함 (형식: `backend/src/route.ts`) |
 
 ```bash
 curl -X POST $API/api/route -H 'Content-Type: application/json' -d '{
