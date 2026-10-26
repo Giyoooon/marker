@@ -520,7 +520,7 @@ function showResult(i) {
   if (!KMap.ready()) return;
   KMap.focus(r.lat, r.lng);
   KMap.openPopup(r.lat, r.lng, `<span class="title">${esc(r.name)}</span><div class="addr">${esc(r.addr)}</div>
-    <div class="actions">${markButton(r, 'res:' + i)}</div>`);
+    <div class="actions">${markButton(r, 'res:' + i)}</div>`, { offset: 14 });   // 검색 결과 점(16px) 바로 위
 }
 $('#searchForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -551,7 +551,7 @@ function onMapClick(lat, lng) {
     <div class="cat-pick" role="radiogroup" aria-label="분류">
       ${Object.entries(CATS).map(([k, c]) => `<label style="--c:${c.color}"><input type="radio" name="clickCat" value="${k}" ${k === 'etc' ? 'checked' : ''}><span>${c.icon} ${c.name}</span></label>`).join('')}
     </div>
-    <div class="actions"><button class="mark" data-act="mark" data-src="click">마킹</button></div>`);
+    <div class="actions"><button class="mark" data-act="mark" data-src="click">마킹</button></div>`, { offset: 8 });   // 누른 자리 바로 위
   const input = el.querySelector('input[type=text]');
   input.addEventListener('keydown', e => { if (e.key === 'Enter') markClicked(); });
   setTimeout(() => input.focus(), 50);

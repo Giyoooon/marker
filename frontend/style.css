@@ -328,3 +328,12 @@ dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor;
   .toast.on { transform: translate(-50%, 0); }
 }
 .leg .what.pending { color: var(--muted); font-style: normal; }
+
+/* 분류 칩이 넘치면 오른쪽 끝을 흐리게 → 옆으로 넘길 수 있다는 걸 보여 줌 */
+.filters { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 28px; }
+@media (max-width: 860px) {
+  /* 공유 지도에선 위쪽 막대에 코드·제목이 있고 '같이 새기기' 버튼도 숨겨지므로, 로고 줄을 없애 목록 자리를 넓힘 */
+  .in-room .brand { display: none; }
+  .in-room header { padding-top: 2px; }
+  .in-room #roomBar { margin-top: 0; }
+}

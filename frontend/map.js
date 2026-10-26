@@ -96,7 +96,11 @@ const KMap = (() => {
   function setVisible(layer, on) { visible[layer] = on; layers[layer].forEach(o => o.setMap(on ? map : null)); }
   function clear(layer) { layers[layer].forEach(o => o.setMap(null)); layers[layer].length = 0; }
 
-  function openPopup(lat, lng, html) {
+  /**
+   * 지도 위 말풍선. offset: 좌표에서 위로 띄울 높이(px) — 물방울 핀이면 핀 위로 올려서 핀을 가리지 않게.
+   * 열고 나면 화면(과 모바일 시트에 가린 부분) 밖으로 나간 만큼 지도를 옮겨서 다 보이게 함
+   */
+  function openPopup(lat, lng, html, { offset = 46 } = {}) {
     closePopup();
     const el = document.createElement('div');
     el.className = 'popup';
@@ -104,11 +108,30 @@ const KMap = (() => {
     // 팝업 안 클릭이 지도 클릭으로 번지지 않게 막고, 버튼 동작은 app.js 로 넘김
     el.addEventListener('click', e => { e.stopPropagation(); KMap.onAction(e); });
     el.addEventListener('mousedown', e => e.stopPropagation());
-    popup = new kakao.maps.CustomOverlay({ position: LL(lat, lng), content: el, xAnchor: 0.5, yAnchor: 1.12, zIndex: 3000, clickable: true });
+    // 투명한 아래 여백(offset)까지 포함한 상자의 아래 끝을 좌표에 맞춤 → 말풍선은 offset 만큼 위에 뜸
+    const box = document.createElement('div');
+    box.style.paddingBottom = `${offset}px`;
+    box.style.pointerEvents = 'none';
+    el.style.pointerEvents = 'auto';
+    box.appendChild(el);
+    popup = new kakao.maps.CustomOverlay({ position: LL(lat, lng), content: box, xAnchor: 0.5, yAnchor: 1, zIndex: 3000, clickable: true });
     popup.setMap(map);
+    requestAnimationFrame(() => keepInView(el));
     return el;
   }
   function closePopup() { if (popup) { popup.setMap(null); popup = null; } }
+  /** 요소가 지도 화면 안(위·좌우 여백 12px, 아래는 시트에 가린 만큼 제외)에 다 보이도록 지도를 옮김 */
+  function keepInView(el) {
+    if (!el.isConnected) return;
+    const r = el.getBoundingClientRect(), m = map.getNode().getBoundingClientRect(), pad = 12;
+    const bottom = m.bottom - coverBottom() - pad;
+    let dx = 0, dy = 0;
+    if (r.top < m.top + pad) dy = r.top - (m.top + pad);
+    else if (r.bottom > bottom) dy = r.bottom - bottom;
+    if (r.left < m.left + pad) dx = r.left - (m.left + pad);
+    else if (r.right > m.right - pad) dx = r.right - (m.right - pad);
+    if (dx || dy) map.panBy(dx, dy);   // panBy 는 지도 중심을 옮김 → 내용은 반대로 움직임
+  }
 
   const center = () => { const c = map.getCenter(); return { lat: c.getLat(), lng: c.getLng() }; };
   function setView(lat, lng, level) { if (level) map.setLevel(level); map.setCenter(LL(lat, lng)); }
