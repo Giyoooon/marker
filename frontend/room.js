@@ -279,7 +279,9 @@ const Room = (() => {
     const others = room.members.filter(x => x.id !== room.me?.id).sort((a, b) => isOnline(b.id) - isOnline(a.id));
     const onlineOthers = others.filter(o => isOnline(o.id));
     const known = room.online != null;
-    const viewing = room.viewers ? `, 구경 ${room.viewers}명` : '';
+    // 구경 수에서 나는 뺌 (닉네임을 아직 안 정했으면 내 연결도 '구경'으로 세어짐)
+    const viewers = Math.max(0, (room.viewers || 0) - (room.me || !wsOpen ? 0 : 1));
+    const viewing = viewers ? `, 구경 ${viewers}명` : '';
     // 나 말고 아무도 없으면 코드 공유를 권하고 바로 공유 창을 여는 버튼
     const status = !others.length
       ? `<span class="muted">친구에게 코드를 공유해봐요${viewing}</span><button class="chip share-chip" data-act="roomShare">코드 공유</button>`

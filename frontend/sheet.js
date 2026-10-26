@@ -10,7 +10,8 @@ const Sheet = (() => {
   function heights() {
     const vh = window.innerHeight;
     const peek = Math.min(handle.offsetHeight + header.offsetHeight + 4, vh * 0.6);
-    return { peek, half: Math.max(peek + 140, Math.round(vh * 0.46)), full: vh - 48 };
+    // 반: 지도를 절반쯤 남기면서 목록이 몇 줄은 보이게 (위쪽 영역이 크면 그만큼 더 올림)
+    return { peek, half: Math.min(vh - 48, Math.max(peek + 240, Math.round(vh * 0.55))), full: vh - 48 };
   }
   function apply() {
     if (!mobile.matches) {
