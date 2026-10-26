@@ -4,11 +4,14 @@
 //   POST /api/route               마커 순서대로 경로 계산, optimize 면 최단 순서로 정렬 (형식: src/route.ts)
 //   POST /api/leg                 두 지점 사이 한 구간 (화면이 구간마다 동시에 요청). 도로 구간은 6시간 캐시
 //   /api/maps...                  공유 지도 (src/shared.ts)
+//   GET  /robots.txt              검색·AI 수집 금지
+// 봇·자동화 대비: 기능별 IP 요청 수 제한, 웹소켓 출처·연결 수 제한 (src/security.ts)
 import { directions, KakaoError, searchKeyword, type Section } from './kakao';
 import { route, routeLeg } from './route';
 import * as shared from './shared';
 export { MapRoom } from './room';
 import type { Env, Place } from './types';
+import { allowedOrigin, clientIp, limit, NO_INDEX, ROBOTS_TXT, TooMany } from './security';
 import { BadRequest, validateLeg, validateRoute } from './validate';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -35,11 +38,14 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, '');
 
+  if (path === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   if (path === '/api/health') return json({ ok: true, kakao: !!env.KAKAO_REST_KEY });
+  const ip = clientIp(req);
 
   if (path === '/api/search' && req.method === 'GET') {
     const q = url.searchParams.get('q')?.trim();
     if (!q) throw new BadRequest('q: 검색어가 필요해요');
+    await limit(env, 'RL_SEARCH', ip);
     if (!env.KAKAO_REST_KEY) return json({ error: '서버에 카카오 REST 키가 설정되지 않았어요' }, 503);
     // 지도 중심 좌표로 검색 결과를 가까운 순으로 보정. 캐시가 잘 맞도록 1km 정도로 반올림
     const round = (v: string | null) => Math.round(Number(v) * 100) / 100;
@@ -56,23 +62,39 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
   }
 
   if (path === '/api/route' && req.method === 'POST') {
+    await limit(env, 'RL_ROUTE', ip);
     return json(await route(validateRoute(await readJson(req)), env));
   }
 
   if (path === '/api/leg' && req.method === 'POST') {
+    await limit(env, 'RL_ROUTE', ip);
     const key = env.KAKAO_REST_KEY;
     return json(await routeLeg(validateLeg(await readJson(req)), key ? (a, b) => cachedRoad(key, a, b, ctx) : null));
   }
 
-  if (path === '/api/maps' || path.startsWith('/api/maps/')) return handleMaps(req, env, ctx, path);
+  if (path === '/api/maps' || path.startsWith('/api/maps/')) {
+    try {
+      return await handleMaps(req, env, ctx, path, ip);
+    } catch (e) {
+      // 없는 지도 코드를 자꾸 찌르면(코드 맞히기) 404 대신 429
+      if (e instanceof shared.NotFound) await limit(env, 'RL_MISS', ip);
+      throw e;
+    }
+  }
 
   return json({ error: 'not found' }, 404);
 }
 
 /** 공유 지도 API. 경로 형식과 동작은 src/shared.ts 맨 위 주석 참고 */
-async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
+async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: string, ip: string): Promise<Response> {
   const db = env.DB;
   const m = req.method;
+  // 기능별 요청 수 제한: 만들기 / 닉네임 / 웹소켓 / 바꾸기 / 조회
+  const sub0 = path.split('/')[4];
+  await limit(env, m === 'POST' && path === '/api/maps' ? 'RL_CREATE'
+    : sub0 === 'members' ? 'RL_JOIN'
+    : sub0 === 'ws' ? 'RL_WS'
+    : m === 'GET' ? 'RL_READ' : 'RL_WRITE', ip);
   if (path === '/api/maps' && m === 'POST') return json(await shared.createMap(db, await readJson(req)), 201);
 
   const parts = path.split('/').slice(3);   // [code, sub?, id?]
@@ -92,7 +114,7 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
     if (m === 'GET') return json(await shared.getMap(db, code), 200, { 'Cache-Control': 'no-store' });
     if (m === 'PATCH') return reply(await shared.updateMap(db, code, await readJson(req)));
   } else if (sub === 'ws' && m === 'GET') {
-    return connectRoom(req, env, code, room());
+    return connectRoom(req, env, code, room(), ip);
   } else if (sub === 'members' && !idStr && m === 'POST') {
     const { created, ...r } = await shared.joinMap(db, code, await readJson(req));
     return reply(r, created ? 201 : 200);
@@ -108,16 +130,15 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
 }
 
 /**
- * 지도 방 웹소켓 연결. 허용된 출처에서만 받고, memberId 가 있으면 D1 에서 닉네임을 확인해서 방에 넘김
- * (닉네임이 없거나 이 지도 사람이 아니면 '구경 중'으로 연결)
+ * 지도 방 웹소켓 연결. 허용된 사이트에서 연 것만(Origin 필수) 받고, memberId 가 있으면 D1 에서 닉네임을 확인해서 방에 넘김
+ * (닉네임이 없거나 이 지도 사람이 아니면 '구경 중'으로 연결). 방이 IP·전체 연결 수를 한 번 더 제한함
  */
-async function connectRoom(req: Request, env: Env, code: string, room: DurableObjectStub): Promise<Response> {
+async function connectRoom(req: Request, env: Env, code: string, room: DurableObjectStub, ip: string): Promise<Response> {
   if (req.headers.get('Upgrade') !== 'websocket') return json({ error: '웹소켓으로 연결해 주세요' }, 426);
-  const origin = req.headers.get('Origin');
-  const allowed = (env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim());
-  if (origin && !allowed.includes(origin)) return json({ error: '허용되지 않은 출처예요' }, 403);
-  if (!(await shared.mapExists(env.DB, code))) return json({ error: '없는 지도 코드예요' }, 404);
+  if (!allowedOrigin(req, env)) return json({ error: '허용되지 않은 출처예요' }, 403);
+  if (!(await shared.mapExists(env.DB, code))) throw new shared.NotFound('없는 지도 코드예요');
   const target = new URL('https://room/connect');
+  target.searchParams.set('ip', ip);
   const memberId = new URL(req.url).searchParams.get('memberId');
   if (memberId) {
     try {
@@ -138,14 +159,15 @@ export default {
       res = await handle(req, env, ctx);
       if (res.status === 101) return res;   // 웹소켓 연결은 그대로 돌려줘야 함 (헤더를 다시 감싸면 연결이 끊김)
     } catch (e) {
-      if (e instanceof BadRequest) res = json({ error: e.message }, 400);
+      if (e instanceof TooMany) res = json({ error: e.message }, 429, { 'Retry-After': '60' });
+      else if (e instanceof BadRequest) res = json({ error: e.message }, 400);
       else if (e instanceof shared.NotFound) res = json({ error: e.message }, 404);
       else if (e instanceof shared.Conflict) res = json({ error: e.message }, 409);
       else if (e instanceof KakaoError) res = json({ error: `카카오 API 오류: ${e.message}` }, 502);
       else { console.error(e); res = json({ error: '서버 오류' }, 500); }
     }
     const out = new Response(res.body, res);
-    for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+    for (const [k, v] of Object.entries({ ...cors, ...NO_INDEX })) out.headers.set(k, v);
     return out;
   },
 } satisfies ExportedHandler<Env>;

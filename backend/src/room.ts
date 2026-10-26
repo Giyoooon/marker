@@ -3,10 +3,19 @@
 // - 지도가 바뀌면 Worker 가 POST /broadcast 로 변경(ChangeEvent)을 넘기고, 방이 접속한 모두에게 전달
 // 웹소켓 Hibernation API 를 써서, 아무도 말하지 않을 땐 방이 잠들어도 연결은 유지됨
 import { DurableObject } from 'cloudflare:workers';
+import { ROOM_LIMITS } from './security';
 import type { Env } from './types';
 
 /** 연결마다 붙여 두는 정보. member 가 없으면 닉네임 없이 구경 중 */
-export interface Attachment { sid: string; member: { id: number; nickname: string } | null; since: string }
+export interface Attachment { sid: string; member: { id: number; nickname: string } | null; since: string; ip?: string }
+
+/** 새 연결을 받아도 되는지. 안 되면 거절 이유 (봇이 연결을 잔뜩 붙여 방을 마비시키거나 엿보는 것 방지) */
+export function admitError(conns: Attachment[], ip: string, isViewer: boolean): string | null {
+  if (conns.length >= ROOM_LIMITS.total) return '이 지도에 접속한 연결이 너무 많아요';
+  if (conns.filter(c => c.ip === ip).length >= ROOM_LIMITS.perIp) return '같은 곳에서 연결이 너무 많아요';
+  if (isViewer && conns.filter(c => !c.member).length >= ROOM_LIMITS.viewers) return '구경하는 연결이 너무 많아요';
+  return null;
+}
 
 export interface Presence {
   type: 'presence';
@@ -88,7 +97,10 @@ export class MapRoom extends DurableObject<Env> {
       sid: crypto.randomUUID(),
       member: Number.isInteger(id) && id > 0 && nickname ? { id, nickname } : null,
       since: new Date().toISOString(),
+      ip: url.searchParams.get('ip') ?? 'unknown',   // Worker 가 CF-Connecting-IP 로 넘겨줌
     };
+    const refused = admitError(this.conns(), attachment.ip!, !attachment.member);
+    if (refused) return new Response(refused, { status: 429, headers: { 'Retry-After': '60' } });
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(attachment);
@@ -111,7 +123,11 @@ export class MapRoom extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     // 보통 'ping' 은 자동 응답이 처리함. 변경은 반드시 HTTP API 로 (누가 했는지 D1 에서 확인하려고)
-    if (message === 'ping') ws.send('pong');
+    if (message === 'ping') { ws.send('pong'); return; }
+    // 그 밖의 메시지는 화면이 보낼 일이 없음 → 봇·스크립트로 보고 끊음 (방을 계속 깨우는 것 방지)
+    this.closing.add(ws);
+    try { ws.close(1008, '허용되지 않는 메시지'); } catch { /* 이미 끊김 */ }
+    this.sendPresence(ws);
   }
   async webSocketClose(ws: WebSocket, code: number, reason: string) {
     this.closing.add(ws);
