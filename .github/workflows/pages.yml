@@ -22,7 +22,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # 저장소 Settings > Secrets and variables > Actions > Variables 에 등록한 값으로 config.js 생성
       - name: Write config.js
         env:
