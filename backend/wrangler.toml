@@ -4,8 +4,9 @@ compatibility_date = "2025-09-01"
 account_id = "41a5668f3ab9fce48ef416ed5e67ba88"
 
 [vars]
-# 브라우저에서 이 API를 호출할 수 있는 출처 (쉼표로 구분)
-ALLOWED_ORIGINS = "https://giyoooon.github.io,http://localhost:8080,http://127.0.0.1:8080"
+# 브라우저에서 이 API를 호출할 수 있는 출처 (쉼표로 구분). 실서비스만 — 로컬은 npm run dev 가 --var 로 localhost 를 넣음
+# 대시보드에서 바꿔도 배포하면 이 값으로 덮어씀 → 여기서 바꿀 것
+ALLOWED_ORIGINS = "https://giyoooon.github.io"
 
 # KAKAO_REST_KEY 는 비밀값이라 여기 두지 않음
 #   로컬: backend/.dev.vars 에 KAKAO_REST_KEY=...

@@ -161,7 +161,7 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
 ### Cloudflare Workers (무료 플랜)
 - 요청 한 번에 외부 호출(subrequest) **50회 한도**. `route.ts` 의 `KAKAO_CALL_LIMIT`(48) 로 관리. 한도 넘는 구간은 직선
 - 검색 결과는 Cache API 로 하루 캐시 (지도 중심 좌표는 소수 2자리로 반올림해서 캐시 키에)
-- CORS 허용 출처는 `wrangler.toml` 의 `ALLOWED_ORIGINS`. 브라우저만 막을 뿐 API 자체는 공개
+- CORS 허용 출처는 `wrangler.toml` 의 `ALLOWED_ORIGINS` = **실서비스(giyoooon.github.io)만** (2026-10-27 사용자가 localhost 제거). 로컬은 `npm run dev` 가 `--var` 로 localhost:8080 을 넣음. 대시보드에서 바꿔도 배포 때 wrangler.toml 값으로 덮어써지므로 여기서 바꿀 것
 
 ### D1 (공유 지도 DB)
 - DB `marker`, 바인딩 `DB`. 스키마는 `backend/migrations/` — **이미 적용된 마이그레이션은 고치지 말고 새 번호 파일로 추가**
