@@ -104,3 +104,29 @@ describe('검색·AI 수집 금지', () => {
     expect(h.headers.get('X-Robots-Tag')).toContain('noai');
   });
 });
+
+describe('정확한 요청 수 제한 (Guard)', () => {
+  it('최근 60초 안에서만 세는 슬라이딩 윈도', async () => {
+    const { slidingHit } = await import('../src/guard');
+    let times: number[] = [], ok = 0;
+    for (let k = 0; k < 12; k++) { const r = slidingHit(times, 1000 + k, 10, 60_000); times = r.times; if (r.ok) ok++; }
+    expect(ok).toBe(10);                                                     // 10번까지만
+    expect(slidingHit(times, 1000 + 60_000, 10, 60_000).ok).toBe(true);      // 1분 지나면 다시
+  });
+
+  it('Guard 가 있으면 코드 맞히기는 바인딩과 상관없이 정확히 막음', async () => {
+    const { Guard } = await import('../src/guard');
+    const guards = new Map<string, InstanceType<typeof Guard>>();
+    const GUARD = { idFromName: (n: string) => n,
+      // 실제 Durable Object 스텁처럼 주소 문자열을 Request 로 바꿔서 넘김
+      get: (n: string) => { if (!guards.has(n)) guards.set(n, new Guard({} as never, {} as never)); const g = guards.get(n)!; return { fetch: (u: string) => g.fetch(new Request(u)) }; } };
+    const e = { ...env(), GUARD };   // 바인딩은 전부 '통과'로 응답하는 상태 (실서비스처럼)
+    const codes: number[] = [];
+    for (let k = 0; k < 13; k++) codes.push((await call(e, 'GET', `/api/maps/Z${String(k).padStart(3, '0')}`)).status);
+    expect(codes.filter(c => c === 404)).toHaveLength(10);
+    expect(codes.slice(10)).toEqual([429, 429, 429]);
+    // 다른 IP 는 따로 셈
+    const other = await worker.fetch(new Request('https://api.test/api/maps/ZZZZ', { headers: { 'CF-Connecting-IP': '5.6.7.8' } }), e as never, {} as never);
+    expect(other.status).toBe(404);
+  });
+});

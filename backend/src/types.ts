@@ -13,4 +13,6 @@ export interface Env {
   /** 요청 수 제한 (wrangler.toml [[ratelimits]], src/security.ts). 없으면 제한하지 않음 */
   RL_WS?: RateLimit; RL_MISS?: RateLimit; RL_READ?: RateLimit; RL_WRITE?: RateLimit;
   RL_CREATE?: RateLimit; RL_JOIN?: RateLimit; RL_SEARCH?: RateLimit; RL_ROUTE?: RateLimit;
+  /** IP 마다 하나인 정확한 요청 수 제한 (src/guard.ts). 없으면 건너뜀 */
+  GUARD?: DurableObjectNamespace;
 }

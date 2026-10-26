@@ -24,6 +24,11 @@ migrations_dir = "migrations"
 name = "ROOMS"
 class_name = "MapRoom"
 
+# IP 마다 하나인 정확한 요청 수 제한 (src/guard.ts) — [[ratelimits]] 가 근사치라 봇 대비 핵심은 여기서
+[[durable_objects.bindings]]
+name = "GUARD"
+class_name = "Guard"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MapRoom"]   # 무료 플랜은 SQLite 방식 Durable Object 만 가능
@@ -69,3 +74,7 @@ simple = { limit = 30, period = 60 }
 name = "RL_ROUTE"     # 경로 구간·최단 정렬 (카카오 길찾기)
 namespace_id = "1108"
 simple = { limit = 150, period = 60 }
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Guard"]

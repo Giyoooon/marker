@@ -10,6 +10,7 @@ import { directions, KakaoError, searchKeyword, type Section } from './kakao';
 import { route, routeLeg } from './route';
 import * as shared from './shared';
 export { MapRoom } from './room';
+export { Guard } from './guard';
 import type { Env, Place } from './types';
 import { allowedOrigin, clientIp, limit, NO_INDEX, ROBOTS_TXT, TooMany } from './security';
 import { BadRequest, validateLeg, validateRoute } from './validate';
