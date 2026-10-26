@@ -193,6 +193,9 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
   - 켜기: Cloudflare 대시보드 > Turnstile 위젯(도메인 giyoooon.github.io) → 비밀키는 Worker 비밀값 `TURNSTILE_SECRET`, 사이트 키는 GitHub 저장소 변수 `TURNSTILE_SITE_KEY`(pages.yml 이 config.js 에 넣음). **둘 다 넣어야 함** — 비밀키만 있으면 화면이 통과증을 못 받아 공유 지도 변경이 다 막힘. 둘 다 없으면 꺼짐
   - Turnstile 이 돌려준 hostname 이 ALLOWED_ORIGINS 도메인인지도 확인. 로컬 시험은 Cloudflare 시험용 키(사이트 1x00000000000000000000AA / 비밀 1x0000000000000000000000000000000AA, 항상 통과·hostname 검사 건너뜀)
   - /api/human 은 Guard 로 IP 마다 10/분
+  - 2026-10-27 켬(키 두 개 넣음). 확인 상자는 popover 로 띄움 — 첫 화면·만들기 창(모달 dialog)이 top layer 라 그냥 붙이면 어두운 배경 밑에 깔려 못 누름
+  - **헤드리스 Edge(CDP) 는 봇으로 판정돼 체크 상자를 눌러도 통과 못 함** → 실제 사이트의 공유 지도 자동 테스트(cdp-rt 등)는 이제 안 됨. 로컬에서 시험용 키로 확인하고, 실제 사이트는 사람이 확인
+  - 사이트 키 변수를 바꾼 뒤엔 Pages 를 새로 배포해야 config.js 에 들어감 (frontend 를 바꾼 커밋 push)
 - 남은 위험: Origin·User-Agent 는 흉내낼 수 있지만 변경·웹소켓은 통과증이 있어야 함. 통과증 하나를 봇이 24시간 돌려쓰는 건 요청 수 제한이 막음
 
 ### 프론트
