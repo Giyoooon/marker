@@ -295,6 +295,14 @@ const Room = (() => {
       const done = await onSubmit(new FormData(form), btn?.value, form);
       if (done !== false) d.close();
     });
+    // 입력 칸에서 Enter 는 그 창의 주 버튼([data-enter], 없으면 .primary). 폼 기본 동작이면 맨 앞 버튼(뒤로·그냥할래요)이 눌림
+    // 한글 조합 중 Enter(isComposing)는 글자 확정용이라 무시
+    form.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      if (!e.target.matches('input:not([type=checkbox]):not([type=radio])')) return;
+      e.preventDefault();
+      (form.querySelector('[data-enter]') || form.querySelector('button.primary'))?.click();
+    });
     if (!d.open) d.showModal();   // 단계만 바꿀 땐 열린 창 그대로
     d.querySelector('input:not([type=checkbox]):not([type=radio])')?.focus();
   }
@@ -322,7 +330,7 @@ const Room = (() => {
       <input id="nick" name="nickname" maxlength="20" placeholder="예: 지윤" value="${esc(suggest)}" autocomplete="nickname">
       <div class="dlg-actions">
         <button class="btn" value="cancel">구경만 할게요</button>
-        <button class="btn ${known.length ? '' : 'primary'}" value="new">새 이름으로 들어가기</button>
+        <button class="btn ${known.length ? '' : 'primary'}" value="new" data-enter>새 이름으로 들어가기</button>
       </div>`,
     async (fd, value, form) => {
       const nickname = value === 'new' ? String(fd.get('nickname') || '').trim() : value;
@@ -410,13 +418,10 @@ const Room = (() => {
       }
     });
     const box = dlg().querySelector('[name=code]');
-    // 입력은 대문자로, Enter 는 같이하기 (폼 기본 동작이면 첫 버튼인 '그냥할래요'가 눌림)
+    // 입력은 영문 대문자·숫자만 (Enter 는 openDialog 가 주 버튼인 같이하기로 보냄)
     box.addEventListener('input', () => {
       box.value = box.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
       dlg().querySelector('#codeMsg').textContent = '';
-    });
-    box.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); dlg().querySelector('[value=join]').click(); }
     });
   }
 
