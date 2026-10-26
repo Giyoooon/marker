@@ -32,6 +32,11 @@
 - 숙소 출발·복귀(왕복): 경로에 숙소가 있으면 맨 위 출발지로 고정, 마지막에 숙소로 복귀
 - 최단 순서로 정렬: 출발지(첫 마커 또는 숙소) 고정, 나머지 최적화. 왕복이면 돌아오는 길 포함
 - 경로선: 빨강(`#E8283C`) + 흰 테두리, 구간마다 도로를 따라 그림. 도로를 못 찾은 구간만 직선 점선. 계산 중엔 선을 그리지 않음
+- **경로는 구간마다 따로 계산** (`fetchRoute`): 구간(출발→도착)마다 `POST /api/leg` 를 6개씩 동시에 보내고, 오는 구간부터 바로 그림. 아래 바엔 "구간 계산 중 n/m", 목록 구간엔 "계산 중…"
+  - 받은 구간은 `legCache`(이동수단+좌표)에 기억 → 마커 추가·순서 바꾸기 땐 새로 생긴 구간만 요청 (1곳 추가 = 1번, 되돌리기 = 0번). 직선 추정 결과는 기억 안 함
+  - 서버는 도로 구간을 Cache API 에 6시간 저장(`cachedRoad`). 이동수단별 시간은 매번 `legFromRoad` 로 계산
+  - 최단 순서로 정렬은 서버에 순서만 받고(`/api/route` `orderOnly: true`) 구간은 같은 방식으로 채움
+  - 2026-10-27 측정(10곳, 자동차): 예전 한 번에 1.19초 → 구간별 처음 첫 구간 0.2초·전체 1.05초, 서버 캐시 0.19초
 - 구간에 마우스를 올리거나(목록·지도) 누르면 그 구간만 강조, 누르면 고정+확대
 - 방향 화살표는 가시성이 나빠 꺼 둠 (app.js `renderRouteLines` 에서 주석 처리, `KMap.arrows`·`.arrow` 는 남아 있음)
 - 구간마다 카카오맵 "길찾기", 마커 팝업에 "여기로 길찾기"(내 위치 출발)
@@ -82,10 +87,10 @@ frontend/   정적 페이지, 빌드 없음
   style.css   (디자인 규칙 아래 참고)
   config.js   git 제외. 배포 때 GitHub Actions 가 저장소 Variables 로 생성
 backend/    Cloudflare Worker (TypeScript)
-  index.ts    라우터·CORS: /api/health, /api/search, /api/route, /api/maps...
+  index.ts    라우터·CORS: /api/health, /api/search, /api/route, /api/leg(도로 구간 6시간 캐시), /api/maps...
   shared.ts   공유 지도 API (D1). 맨 위 주석에 엔드포인트 목록. 바꾸는 함수는 { ..., event } 를 돌려줌
   room.ts     지도 방 Durable Object (웹소켓 Hibernation API). presenceOf 는 순수 함수
-  route.ts    경로 계산 (순서 최적화, 왕복, 구간별 도로 경로·폴백)
+  route.ts    경로 계산: routeLeg(한 구간, /api/leg), route(순서 최적화·왕복, orderOnly 면 순서만)
   order.ts    방문 순서 최적화 (최근접 이웃 + 2-opt + or-opt, 순수 함수)
   matrix.ts   이동시간 행렬 (카카오 다중 목적지 / 직선거리 추정)
   kakao.ts    카카오 로컬·모빌리티 REST 래퍼
@@ -97,7 +102,7 @@ backend/    Cloudflare Worker (TypeScript)
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest (45개)
+cd backend && npm test          # vitest (50개)
 cd backend && npm run typecheck
 cd backend && npx wrangler d1 migrations apply marker --local   # 로컬 DB 준비
 cd backend && npm run dev       # http://localhost:8787 (카카오 키 없으면 추정값으로 동작)
