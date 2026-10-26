@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 로고(.logo)와 같은 모양: 세 모서리를 둥글린 정사각형을 -45도 돌려 뾰족한 끝이 아래로 -->
+  <g transform="translate(16 12.5) rotate(-45) translate(-11 -11)">
+    <path d="M0 22V11A11 11 0 0 1 11 0A11 11 0 0 1 22 11A11 11 0 0 1 11 22Z" fill="#1E2A44"/>
+  </g>
+</svg>

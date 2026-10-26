@@ -349,7 +349,8 @@ function renderRouteLines() {
     const z = active === k ? 3 : 1;
     KMap.line('route', path, '#FFFFFF', { weight: active === k ? 11 : 9, opacity: on ? 0.95 : 0.5, dashed: !road, z, ...events });
     KMap.line('route', path, ROUTE_COLOR, { weight: active === k ? 7 : 5, opacity: on ? 0.95 : 0.25, dashed: !road, z, ...events });
-    if (on && road) KMap.arrows('route', path);
+    // 방향 화살표: 가시성이 좋지 않아 일단 끔 (map.js 의 KMap.arrows 와 style.css 의 .arrow 는 남겨 둠)
+    // if (on && road) KMap.arrows('route', path);
   });
 }
 
