@@ -252,9 +252,13 @@ const Room = (() => {
     const others = room.members.filter(x => x.id !== room.me?.id).sort((a, b) => isOnline(b.id) - isOnline(a.id));
     const onlineOthers = others.filter(o => isOnline(o.id));
     const known = room.online != null;
-    const status = !known ? '<span class="muted">연결하는 중…</span>'
-      : onlineOthers.length ? `<span class="muted"><b class="live">${onlineOthers.map(o => esc(o.nickname)).join(', ')}</b> 접속 중${room.viewers ? `, 구경 ${room.viewers}명` : ''}</span>`
-      : `<span class="muted">${others.length ? '지금은 나만 있어요' : '아직 나만 있어요. 번호를 알려 주세요'}${room.viewers ? `, 구경 ${room.viewers}명` : ''}</span>`;
+    const viewing = room.viewers ? `, 구경 ${room.viewers}명` : '';
+    // 나 말고 아무도 없으면 코드 공유를 권하고 바로 공유 창을 여는 버튼
+    const status = !others.length
+      ? `<span class="muted">친구에게 코드를 공유해봐요${viewing}</span><button class="chip share-chip" data-act="roomShare">코드 공유</button>`
+      : !known ? '<span class="muted">연결하는 중…</span>'
+      : onlineOthers.length ? `<span class="muted"><b class="live">${onlineOthers.map(o => esc(o.nickname)).join(', ')}</b> 접속 중${viewing}</span>`
+      : `<span class="muted">지금은 나만 있어요${viewing}</span>`;
     bar.innerHTML = `
       <div class="room-top">
         <button class="room-code" data-act="roomShare" title="번호·링크 공유">${room.code}</button>

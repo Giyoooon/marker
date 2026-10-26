@@ -294,3 +294,5 @@ li.row.flash { animation: flash 2s ease-out; }
 @keyframes flash { 0%, 30% { background: #FFF3BF; box-shadow: 0 0 0 2px #FCC419; } 100% { background: var(--paper); box-shadow: none; } }
 dialog#dlg .redo { align-self: center; margin-top: 12px; padding: 4px 8px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #C9CED8; }
 dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor; }
+.room-people .share-chip { flex: none; padding: 3px 9px; font-size: 12px; background: var(--paper); border-color: #D5D9E1; color: var(--ink); }
+.room-people .share-chip:hover { border-color: var(--ink); }
