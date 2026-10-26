@@ -40,6 +40,8 @@ export interface ChangeEvent {
   marker?: { id: number; name: string };
   changes?: Record<string, unknown>;
   at: string;
+  /** 변경을 보낸 화면(탭) id (X-Client-Id). 방에 알릴 때 index.ts 가 붙임 */
+  client?: string;
 }
 
 const mapOut = (r: MapRow) => ({ code: r.code, title: r.title, mode: r.mode, loop: !!r.loop, createdAt: r.created_at, updatedAt: r.updated_at });
@@ -89,13 +91,21 @@ async function getMapRow(db: D1Database, code: string): Promise<MapRow> {
   if (!row) throw new NotFound('없는 지도 코드예요');
   return row;
 }
+/** 지도가 있는지만 (웹소켓 접속 등 지도 내용이 필요 없을 때) */
+export async function mapExists(db: D1Database, code: string): Promise<boolean> {
+  return !!(await db.prepare('SELECT 1 AS ok FROM maps WHERE code = ?').bind(code).first());
+}
 /** 이 지도의 닉네임인지 확인. 바꾸는 요청은 모두 이걸로 누가 했는지 확인함 */
 export async function memberOf(db: D1Database, code: string, memberId: unknown): Promise<MemberRow> {
   const id = Number(memberId);
   const row = Number.isInteger(id)
     ? await db.prepare('SELECT * FROM members WHERE id = ? AND map_code = ?').bind(id, code).first<MemberRow>()
     : null;
-  if (!row) throw new BadRequest('memberId: 이 지도의 닉네임이 아니에요. 닉네임을 다시 정해 주세요');
+  if (!row) {
+    // 닉네임 확인이 곧 지도 확인이라 따로 지도를 먼저 읽지 않음. 실패했을 때만 지도가 없는 건지 가려서 알려 줌
+    if (!(await mapExists(db, code))) throw new NotFound('없는 지도 코드예요');
+    throw new BadRequest('memberId: 이 지도의 닉네임이 아니에요. 닉네임을 다시 정해 주세요');
+  }
   return row;
 }
 const MARKER_SELECT = `SELECT m.*, u.nickname, w.nickname AS updater FROM markers m
@@ -146,7 +156,6 @@ export async function createMap(db: D1Database, body: unknown) {
 
 export async function updateMap(db: D1Database, code: string, body: unknown) {
   if (!isObj(body)) throw new BadRequest('JSON 객체가 필요해요');
-  await getMapRow(db, code);
   const by = await memberOf(db, code, body.memberId);
   const sets: string[] = [], args: unknown[] = [], changes: Record<string, unknown> = {};
   if (body.title !== undefined) { changes.title = text(body.title, '제목', 60); sets.push('title = ?'); args.push(changes.title); }
@@ -179,7 +188,6 @@ export async function joinMap(db: D1Database, code: string, body: unknown) {
 
 export async function addMarker(db: D1Database, code: string, body: unknown) {
   if (!isObj(body)) throw new BadRequest('JSON 객체가 필요해요');
-  await getMapRow(db, code);
   const by = await memberOf(db, code, body.memberId);
   const name = text(body.name, '이름', 80);
   const lat = coord(body.lat, 'lat', 32, 39.5), lng = coord(body.lng, 'lng', 124, 132);
@@ -239,7 +247,6 @@ export async function deleteMarker(db: D1Database, code: string, id: number, mem
 /** 경로에 든 마커의 순서를 ids 순서로. ids 는 지금 경로에 든 마커 전부여야 함 */
 export async function reorder(db: D1Database, code: string, body: unknown) {
   if (!isObj(body) || !Array.isArray(body.ids)) throw new BadRequest('ids: 마커 id 배열이 필요해요');
-  await getMapRow(db, code);
   const by = await memberOf(db, code, body.memberId);
   const ids = body.ids.map(Number);
   const rows = await db.prepare('SELECT id, position FROM markers WHERE map_code = ? AND included = 1 ORDER BY position, id')

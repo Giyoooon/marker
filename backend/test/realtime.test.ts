@@ -177,3 +177,23 @@ describe('지도 방 (접속자 목록, 알림 전달)', () => {
     expect(alarm).toBeNull();
   });
 });
+
+describe('부하 줄이기', () => {
+  it('변경을 보낸 화면 id(X-Client-Id)를 알림에 붙여서, 그 화면은 다시 불러오지 않을 수 있게 한다', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const env = { DB: fakeD1(), ALLOWED_ORIGINS: '', ROOMS: { idFromName: (n: string) => n, get: () => ({ fetch: async (_u: string, i: RequestInit) => { sent.push(JSON.parse(String(i.body))); return new Response(null); } }) } };
+    const waits: Promise<unknown>[] = [];
+    const { map, member } = await shared.createMap(env.DB, { title: 't', nickname: '지윤' });
+    await worker.fetch(new Request(`https://api.test/api/maps/${map.code}/markers`, { method: 'POST', headers: { 'X-Client-Id': 'tab-123' },
+      body: JSON.stringify({ memberId: member.id, ...P('A', 0) }) }), env as never, { waitUntil: (p: Promise<unknown>) => waits.push(p) } as never);
+    await Promise.all(waits);
+    expect(sent[0]).toMatchObject({ action: 'marker.add', client: 'tab-123' });
+  });
+
+  it('지도를 따로 읽지 않아도, 없는 지도에 쓰면 여전히 404', async () => {
+    const db = fakeD1();
+    await expect(shared.addMarker(db, 'ZZZZ', { memberId: 1, ...P('A', 0) })).rejects.toThrow(shared.NotFound);
+    await expect(shared.reorder(db, 'ZZZZ', { memberId: 1, ids: [] })).rejects.toThrow(shared.NotFound);
+    expect(await shared.mapExists(db, 'ZZZZ')).toBe(false);
+  });
+});

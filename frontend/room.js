@@ -4,7 +4,9 @@
 // - 웹소켓으로 지금 접속한 사람(presence)과 다른 사람의 변경을 바로 받음. 끊기면 8초마다 확인으로 대신함
 const Room = (() => {
   const POLL_MS = 8000;           // 웹소켓이 끊겼을 때 확인 간격
-  const POLL_WITH_WS_MS = 30000;  // 웹소켓이 붙어 있어도 이 간격으로 한 번씩 맞춤 (혹시 놓친 알림 대비)
+  const POLL_WITH_WS_MS = 300000; // 웹소켓이 붙어 있으면 알림으로 충분. 혹시 놓친 알림 대비로 5분에 한 번만 맞춤
+  // 이 화면(탭) id. 변경 요청에 붙여 보내고, 웹소켓으로 돌아온 내 변경 알림은 무시 (응답 뒤 이미 맞췄으니까)
+  const CLIENT_ID = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
   const AVATAR_COLORS = ['#1864AB', '#C2255C', '#0B7285', '#5F3DC4', '#E67700', '#2B8A3E', '#862E9C', '#495057'];
   let room = null;        // { code, title, members, me, updatedAt, online, viewers }
   let pending = 0;        // 서버에 보내는 중인 요청 수 (그동안은 받아 오지 않음)
@@ -34,7 +36,8 @@ const Room = (() => {
       const res = await fetch(API + path, {
         signal: AbortSignal.timeout(10000),
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        // 바꾸는 요청에만 화면 id 를 붙임 (GET 에 붙이면 매번 사전 요청(OPTIONS)이 하나 더 생김)
+        headers: method === 'GET' ? undefined : { ...(body ? { 'Content-Type': 'application/json' } : {}), 'X-Client-Id': CLIENT_ID },
         body: body ? JSON.stringify(body) : undefined,
       });
       const data = await res.json().catch(() => ({}));
@@ -97,7 +100,8 @@ const Room = (() => {
       wsOpen = true; retry = 0;
       clearInterval(pingTimer);
       pingTimer = setInterval(() => sock.readyState === 1 && sock.send('ping'), PING_MS);
-      refresh(true);   // 끊겨 있던 동안 바뀐 것 맞추기
+      // 끊겨 있던 동안 바뀐 것 맞추기. 들어오자마자 처음 연결할 땐 방금 불러왔으니 건너뜀
+      if (Date.now() - lastSync > 3000) refresh(true);
     };
     sock.onmessage = e => {
       if (e.data === 'pong') return;
@@ -151,6 +155,7 @@ const Room = (() => {
   /** 변경 알림 → 다른 사람이 한 일이면 토스트·활동 기록·반짝임, 그리고 서버 상태로 맞춤 */
   let refreshSoon = null;
   function onChange(ev) {
+    if (ev.client === CLIENT_ID) return;   // 내 화면이 보낸 변경: 응답 뒤 이미 서버 상태로 맞춤
     // 새 닉네임 알림(member.join)은 곧이어 오는 접속 알림('들어왔어요')과 겹쳐서 따로 알리지 않음
     if (ev.by?.id !== room.me?.id && ev.action !== 'member.join') {
       note(describe(ev), ev.by);

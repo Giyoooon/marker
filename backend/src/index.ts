@@ -21,7 +21,7 @@ function corsHeaders(req: Request, env: Env): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Client-Id',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -82,7 +82,9 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
   const room = () => env.ROOMS.get(env.ROOMS.idFromName(code));
   /** 바뀐 내용을 응답하면서, 같은 지도에 접속한 사람들에게 알림 (응답을 늦추지 않게 waitUntil) */
   const reply = <T extends { event?: shared.ChangeEvent }>({ event, ...data }: T, status = 200) => {
-    if (event) ctx.waitUntil(room().fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify(event) }).catch(e => console.error(e)));
+    // client: 이 변경을 보낸 화면(탭) id. 그 화면은 알림을 받아도 다시 불러오지 않음 (이미 응답으로 알고 있으니까)
+    const client = req.headers.get('X-Client-Id')?.slice(0, 64) || undefined;
+    if (event) ctx.waitUntil(room().fetch('https://room/broadcast', { method: 'POST', body: JSON.stringify({ ...event, client }) }).catch(e => console.error(e)));
     return json(data, status);
   };
 
@@ -114,7 +116,7 @@ async function connectRoom(req: Request, env: Env, code: string, room: DurableOb
   const origin = req.headers.get('Origin');
   const allowed = (env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim());
   if (origin && !allowed.includes(origin)) return json({ error: '허용되지 않은 출처예요' }, 403);
-  await shared.getMap(env.DB, code);   // 없는 지도면 404
+  if (!(await shared.mapExists(env.DB, code))) return json({ error: '없는 지도 코드예요' }, 404);
   const target = new URL('https://room/connect');
   const memberId = new URL(req.url).searchParams.get('memberId');
   if (memberId) {

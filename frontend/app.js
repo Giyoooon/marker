@@ -167,7 +167,9 @@ function buildRoute(key, pairs, results) {
   };
 }
 let renderQueued = false;
-const renderSoon = () => { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); } };
+// 구간이 하나씩 올 때마다는 경로에 관한 부분만 다시 그림 (마커 핀은 그대로라 다시 만들지 않음)
+const renderRouteParts = () => { renderList(); renderFoot(); renderRouteLines(); markActiveLegRow(); };
+const renderSoon = () => { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; renderRouteParts(); }); } };
 
 /** 지금 경로의 모든 구간을 계산. 끝나면 resolve (그 사이 경로가 바뀌면 남은 결과는 기억만 하고 그리지 않음) */
 async function fetchRoute() {
