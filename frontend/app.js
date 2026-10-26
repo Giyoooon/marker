@@ -58,7 +58,8 @@ function fromSaved(obj) {
 }
 const serialize = () => JSON.stringify({ mode: state.mode, loop: state.loop,
   markers: state.markers.map(({ name, lat, lng, cat, on }) => ({ name, lat, lng, cat, ...(on ? {} : { on: false }) })) });
-function save() { localStorage.setItem('marker-trip', serialize()); }
+// 공유 지도에 들어가 있을 땐 내 지도(브라우저 저장)를 덮어쓰지 않음
+function save() { if (!Room.active()) localStorage.setItem('marker-trip', serialize()); }
 function load() {
   try {
     const m = location.hash.match(/^#t=(.+)$/);
@@ -83,11 +84,13 @@ function setOn(i, on) {
   state.markers.splice(on ? onCount() : state.markers.length, 0, m);
   KMap.ready() && KMap.closePopup();
   changed();
+  if (Room.active()) Room.patchMarker(m, { on });
   toast(on ? `${m.name}, 경로 맨 끝에 넣었어요` : `${m.name}, 경로에서 뺐어요`);
 }
 
 const isMarked = p => state.markers.some(m => posKey(m) === posKey(p));
 function mark(p) {
+  if (!Room.canWrite()) return;   // 공유 지도에선 닉네임부터
   if (isMarked(p)) { toast('이미 마킹한 곳이에요'); return; }
   if (state.markers.length >= MAX_MARKERS) { toast(`마커는 ${MAX_MARKERS}개까지 꽂을 수 있어요`); return; }
   const m = pick({ name: p.name || '이름 없는 곳', lat: p.lat, lng: p.lng, cat: p.cat });
@@ -95,6 +98,7 @@ function mark(p) {
   KMap.ready() && KMap.closePopup();
   if (filter !== 'all' && filter !== m.cat) filter = 'all';
   changed();
+  if (Room.active()) Room.addMarker(m);
   renderResults();
   toast(`${cat(m).icon} ${m.name} 마킹했어요`);
 }
@@ -153,6 +157,7 @@ async function optimize() {
     routeInfo = { ...info, key: routeKey(routePlan()) };
     hoverLeg = selLeg = null;
     render(); save(); fitAll();
+    if (Room.active()) Room.pushOrder();
     toast(before === state.markers.map(m => m.id).join() ? '이미 가장 짧은 순서예요' : `가장 짧은 순서로 바꿨어요 · ${human(info.totalMin)}`);
   } catch (e) {
     toast('정렬하지 못했어요: ' + e.message);
@@ -165,6 +170,7 @@ function swap(i, j) {
   if (j < 0 || j >= onCount()) return;   // 경로 안에서만
   [state.markers[i], state.markers[j]] = [state.markers[j], state.markers[i]];
   changed();
+  if (Room.active()) Room.pushOrder();
 }
 /** from 번째 마커를 to 자리(원래 배열 기준 삽입 위치)로 옮김 */
 function move(from, to) {
@@ -174,6 +180,7 @@ function move(from, to) {
   const [p] = state.markers.splice(from, 1);
   state.markers.splice(to, 0, p);
   changed();
+  if (Room.active()) Room.pushOrder();
 }
 function fitAll() {
   if (!KMap.ready() || !state.markers.length) return;
@@ -261,6 +268,7 @@ function renderList() {
       <span class="grip" title="${pinned ? '숙소는 출발지로 고정돼요' : '끌어서 순서 바꾸기'}" aria-hidden="true">${pinned ? '' : '⠿'}</span>
       <span class="num" title="${pinned ? '출발·복귀' : '방문 순서'}">${badge}</span>
       <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
+      ${Room.byBadge(m)}
       ${catPicker(m, i, c)}
       <button class="icon-btn" data-act="up" data-i="${i}" ${i === 0 || pinned ? 'disabled' : ''} aria-label="위로">▲</button>
       <button class="icon-btn" data-act="down" data-i="${i}" ${i === lastOn || pinned ? 'disabled' : ''} aria-label="아래로">▼</button>
@@ -290,6 +298,7 @@ function renderList() {
       html += `<li class="row off" data-i="${i}" style="--c:${c.color}">
         <input type="checkbox" class="inc" data-i="${i}" aria-label="${esc(m.name)} 경로 맨 끝에 넣기" title="체크하면 경로 맨 끝에 붙어요">
         <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
+        ${Room.byBadge(m)}
         ${catPicker(m, i, c)}
         <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
       </li>`;
@@ -406,6 +415,7 @@ function openMarkerPopup(i) {
   const m = state.markers[i], c = cat(m);
   KMap.openPopup(m.lat, m.lng, `<span class="title">${esc(m.name)}</span>
     <div class="tag" style="--c:${c.color}">${c.icon} ${c.name}${m.on ? '' : ', 경로에서 빠짐'}</div>
+    ${Room.byLine(m)}
     <div class="actions">
       <a class="btn sm" href="${kakaoTo(m)}" target="_blank" rel="noopener">여기로 길찾기</a>
       <button class="btn sm" data-act="toggleOn" data-i="${i}">${m.on ? '경로에서 빼기' : '경로에 넣기'}</button>
@@ -500,11 +510,13 @@ function onAction(e) {
   else if (act === 'toggleOn') setOn(i, !state.markers[i].on);
   else if (act === 'del') {
     const [m] = state.markers.splice(i, 1);
+    if (Room.active()) Room.deleteMarker(m);
     KMap.ready() && KMap.closePopup();
     changed(); renderResults();
     toast(`${m.name} 삭제했어요`);
   }
   else if (act === 'optimize') optimize();
+  else if (act === 'share' && Room.active()) Room.copyLink();
   else if (act === 'share') {
     const url = location.origin + location.pathname + '#t=' + b64enc(serialize());
     navigator.clipboard.writeText(url).then(() => toast('공유 링크를 복사했어요'), () => prompt('아래 링크를 복사하세요', url));
@@ -513,12 +525,12 @@ function onAction(e) {
 $('#markers').addEventListener('change', e => {
   const el = e.target, i = +el.dataset.i;
   if (el.classList.contains('inc')) return setOn(i, el.checked);
-  else if (el.classList.contains('cat-sel')) state.markers[i].cat = el.value;
-  else if (el.id === 'loopToggle') state.loop = el.checked;
+  else if (el.classList.contains('cat-sel')) { state.markers[i].cat = el.value; if (Room.active()) Room.patchMarker(state.markers[i], { cat: el.value }); }
+  else if (el.id === 'loopToggle') { state.loop = el.checked; if (Room.active()) Room.patchMap({ loop: el.checked }); }
   else return;
   changed();
 });
-$('#mode').addEventListener('change', e => { state.mode = e.target.value; changed(); });
+$('#mode').addEventListener('change', e => { state.mode = e.target.value; changed(); if (Room.active()) Room.patchMap({ mode: state.mode }); });
 
 // 구간 행: 마우스를 올리면 지도에서 그 구간만 강조, 누르면 강조 고정(다시 누르면 해제)
 $('#markers').addEventListener('mouseover', e => {
@@ -587,6 +599,8 @@ function showMapError(html) { const el = $('#mapError'); el.innerHTML = `<div>${
     showMapError(`카카오맵을 불러오지 못했어요: ${esc(e.message)}<br>
       카카오 개발자 콘솔 > 앱 > 플랫폼 > Web 에 <b>${esc(location.origin)}</b> 가 등록돼 있는지 확인하세요.`);
   }
-  changed();
+  // ?map=번호 로 열면 공유 지도, 아니면 내 지도(브라우저 저장)
+  const code = new URLSearchParams(location.search).get('map');
+  if (!code || !(await Room.enter(code))) changed();
   fitAll();
 })();

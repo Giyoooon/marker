@@ -14,6 +14,7 @@ backend/   API (Cloudflare Workers, TypeScript) → 카카오 장소 검색, 카
 | --- | --- | --- |
 | GET | `/api/health` | 상태, 카카오 키 설정 여부 |
 | GET | `/api/search?q=&lat=&lng=` | 카카오 키워드 장소 검색 (lat/lng 근처 우선) |
+| | `/api/maps...` | 공유 지도: 만들기·조회·닉네임·마킹(마킹한 사람 저장)·순서 (목록은 `backend/src/shared.ts` 맨 위) |
 | POST | `/api/route` | 마커 순서대로 구간별 시간·거리와 도로 경로 좌표. `optimize: true` 면 최단 순서로 정렬, `roundTrip: true` 면 첫 마커(숙소)로 돌아오는 구간 포함 (형식: `backend/src/route.ts`) |
 
 ```bash

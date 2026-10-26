@@ -25,25 +25,38 @@
 - 구간마다 카카오맵 "길찾기" 버튼, 마커 팝업에 "여기로 길찾기"(내 위치 출발)
 - 공유 링크(`#t=` 에 상태를 base64 로), 브라우저 localStorage(`marker-trip`) 저장
 
+### 공유 지도 (D1)
+- "같이 꽂기" → 제목·내 닉네임으로 공유 지도 생성 → 4자리 번호(`[A-Z0-9]{4}`). 링크는 `?map=번호`. 번호로 들어가기도 같은 창에서
+- 들어가면 닉네임을 정함(기존 닉네임 칩을 누르면 그 사람으로). 로그인 없음, 기기 localStorage `marker-me-<번호>` 에 기억. 닉네임 없으면 구경만(마킹 막힘)
+- 마커마다 마킹한 사람(닉네임 첫 글자 동그라미, 사람마다 색) 표시. 팝업에 "○○ 님이 마킹"
+- 다른 사람 변경은 8초마다 확인(`room.js` `POLL_MS`). 지도 `updated_at` 이 바뀌었을 때만 다시 그림. 내가 보내는 중이거나 끌고 있을 땐 건너뜀
+- 쓰기는 화면을 먼저 바꾸고 서버에 보낸 뒤 서버 상태로 다시 맞춤(`Room.write` → `refresh(true)`). 동시 수정은 나중 것이 이김
+- 공유 지도에 있는 동안은 내 지도(`marker-trip`)를 저장하지 않음. "내 지도로" 누르면 원래 내 지도
+- 이동수단·숙소 왕복도 지도 설정으로 공유됨
+
 ### 의도적으로 뺀 것 (사용자가 제거 요청)
 자동 일정 짜기(며칠·활동 시간·고정 일정·가볼 곳), 지역 선택·추천 명소, 첫날 출발지·마지막날 도착지 설정, 탭 UI.
 `/api/plan`, `/api/regions` 도 삭제함 (git 기록에 있음). 다시 넣자고 하기 전엔 되살리지 말 것.
 
 ### 아이디어만 나온 것 (미착수)
 - API 호출 횟수 제한 (지금은 주소만 알면 누구나 호출 → 카카오 사용량 소모)
-- 친구들끼리 가볼 곳 투표, 여럿이 같은 계획 동시 편집
+- 친구들끼리 가볼 곳 투표 (여럿이 같은 지도 편집은 공유 지도로 구현됨, 실시간 아님 — 8초 폴링)
+- 닉네임 보호(지금은 번호만 알면 누구 닉네임으로든 들어갈 수 있음), 공유 지도 삭제·나가기·닉네임 바꾸기 API
 - 명소 운영 시간 반영
 - 맛집 핀(빨강)과 경로선(빨강) 색이 겹침 — 바꿀지 사용자에게 물어본 상태
 
 ## 구조
 
 ```
-frontend/   정적 페이지, 빌드 없음 (index.html, style.css, map.js, app.js)
+frontend/   정적 페이지, 빌드 없음 (index.html, style.css, map.js, room.js, app.js)
   map.js    카카오맵 SDK 래퍼(KMap). app.js 는 지도 API 를 직접 부르지 않고 이것만 씀
+  room.js   공유 지도(Room): 들어가기·닉네임·서버 동기화·8초 폴링. app.js 가 바뀌는 지점마다 Room.* 를 부름
   app.js    상태·화면·이벤트. 경로 계산·검색은 전부 백엔드 호출
   config.js git 제외. 배포 때 GitHub Actions 가 저장소 Variables 로 생성
 backend/    Cloudflare Worker (TypeScript)
-  index.ts  라우터·CORS: /api/health, /api/search, /api/route
+  index.ts  라우터·CORS: /api/health, /api/search, /api/route, /api/maps...
+  shared.ts 공유 지도 API (D1). 맨 위 주석에 엔드포인트 목록
+  migrations/ D1 스키마 (CI 가 배포 전에 원격 적용). 모든 테이블 created_at·updated_at, 트리거로 갱신
   route.ts  경로 계산 (순서 최적화, 왕복, 구간별 도로 경로·폴백)
   order.ts  방문 순서 최적화 (최근접 이웃 + 2-opt + or-opt, 순수 함수)
   matrix.ts 이동시간 행렬 (카카오 다중 목적지 / 직선거리 추정)
@@ -54,7 +67,7 @@ backend/    Cloudflare Worker (TypeScript)
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest
+cd backend && npm test          # vitest (공유 지도 테스트는 Node 내장 SQLite 에 실제 마이그레이션을 적용해서 돌림: test/fake-d1.ts)
 cd backend && npm run typecheck
 cd backend && npm run dev       # http://localhost:8787 (키 없으면 추정값으로 동작)
 npx http-server frontend -p 8080 -s -c-1
@@ -94,6 +107,14 @@ npx http-server frontend -p 8080 -s -c-1
 - 요청 한 번에 외부 호출(subrequest) **50회 한도**. `route.ts` 의 `KAKAO_CALL_LIMIT`(48) 로 관리: 최단 정렬(마커 수만큼) + 다중 경유지 1 + 구간별 폴백. 한도 넘는 구간은 직선
 - 검색 결과는 Cache API 로 하루 캐시 (지도 중심 좌표는 소수 2자리로 반올림해서 캐시 키에 사용)
 - CORS 허용 출처는 `wrangler.toml` 의 `ALLOWED_ORIGINS`. 브라우저만 막을 뿐 API 자체는 공개 상태
+
+### D1 (공유 지도 DB)
+- DB 이름 `marker`, 바인딩 `DB` (`wrangler.toml`). 스키마는 `backend/migrations/` — **이미 적용된 마이그레이션 파일은 고치지 말고 새 번호 파일로 추가**
+- 모든 테이블에 `created_at`·`updated_at`(UTC ISO, 밀리초). `updated_at` 은 트리거가 갱신. 마커·닉네임이 바뀌면 지도 `updated_at` 도 갱신(클라이언트 변경 감지용)
+- 지도 번호는 DB CHECK 로도 `[A-Z0-9]{4}` 강제. 생성 시 겹치면 최대 10번 다시 뽑음
+- 같은 지도 같은 좌표(소수 5자리) 중복 마킹 금지(UNIQUE), 지도당 마커 31개
+- 마킹한 사람(members)이 지워져도 마커는 남고 `marked_by` 는 NULL
+- 로컬 개발: `npx wrangler d1 migrations apply marker --local` 후 `npm run dev`
 
 ### 프론트
 - 빌드 도구·프레임워크 없음. 순수 HTML/CSS/JS 유지
