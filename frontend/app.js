@@ -34,7 +34,7 @@ function curatedSpots(region) {
   return (REGIONS[region]?.spots || []).map(s => ({ ...s, selected: false, must: false, custom: false }));
 }
 function defaultState() {
-  const region = REGIONS.gangneung ? 'gangneung' : Object.keys(REGIONS)[0];
+  const region = REGIONS.daegu ? 'daegu' : Object.keys(REGIONS)[0];
   return { region, days: 2, mode: 'car', dayTimes: [{ start: '10:00', end: '21:00' }, { start: '09:30', end: '19:00' }],
     lodging: null, firstStart: null, lastEnd: null, fixed: [], spots: curatedSpots(region) };
 }
