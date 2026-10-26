@@ -45,6 +45,7 @@ let searchResults = [];
 let clickPlace = null;
 let routeInfo = null;    // 마지막 /api/route 응답 + 어떤 경로에 대한 응답인지(key)
 let routeSeq = 0, routeTimer = null;
+let hoverLeg = null, selLeg = null;   // 강조 중인 구간 (마우스를 올린 구간, 눌러서 고정한 구간)
 
 const pick = m => ({ id: m.id || 'm' + uid(), name: m.name, lat: m.lat, lng: m.lng, cat: CATS[m.cat] ? m.cat : 'etc', on: m.on !== false });
 function fromSaved(obj) {
@@ -102,6 +103,7 @@ const routeBody = (P, extra = {}) => ({ mode: state.mode, roundTrip: P.roundTrip
   points: P.points.map(({ name, lat, lng }) => ({ name, lat, lng })), ...extra });
 
 function changed() {
+  hoverLeg = selLeg = null;   // 경로가 바뀌면 구간 번호도 바뀜
   render();
   save();
   clearTimeout(routeTimer);
@@ -136,6 +138,7 @@ async function optimize() {
     const before = state.markers.map(m => m.id).join();
     slots.forEach((pos, k) => { state.markers[pos] = moving[k]; });
     routeInfo = { ...info, key: routeKey(routePlan()) };
+    hoverLeg = selLeg = null;
     render(); save(); fitAll();
     toast(before === state.markers.map(m => m.id).join() ? '이미 가장 짧은 순서예요' : `가장 짧은 순서로 바꿨어요 · ${human(info.totalMin)}`);
   } catch (e) {
@@ -189,7 +192,7 @@ function routeView() {
   if (info) {
     const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
     seq.slice(0, -1).forEach((m, k) => {
-      const leg = { leg: info.legs[k], from: m, to: seq[k + 1], back: P.roundTrip && k === seq.length - 2 };
+      const leg = { k, leg: info.legs[k], from: m, to: seq[k + 1], back: P.roundTrip && k === seq.length - 2 };
       if (P.roundTrip && k === 0) firstLeg = leg; else legAfter.set(m.id, leg);
     });
   }
@@ -251,10 +254,10 @@ function renderList() {
         <label class="switch"><input type="checkbox" id="loopToggle" ${state.loop ? 'checked' : ''}><span></span></label>
         <label for="loopToggle" class="loop-label">숙소에서 출발해서 돌아오기</label>
       </li>`;
-      if (state.loop && firstLeg) html += `<li class="leg" data-at="${i + 1}">${legInner(firstLeg.leg, firstLeg.from, firstLeg.to)}</li>`;
+      if (state.loop && firstLeg) html += `<li class="leg" data-at="${i + 1}" data-leg="${firstLeg.k}">${legInner(firstLeg.leg, firstLeg.from, firstLeg.to)}</li>`;
     }
     const leg = showLegs && legAfter.get(m.id);
-    if (leg) html += `<li class="leg" data-at="${i + 1}">${legInner(leg.leg, leg.from, leg.to, leg.back ? '🏨 숙소로 ' : '')}</li>`;
+    if (leg) html += `<li class="leg" data-at="${i + 1}" data-leg="${leg.k}">${legInner(leg.leg, leg.from, leg.to, leg.back ? '🏨 숙소로 ' : '')}</li>`;
   });
   html += '</ol>';
   if (!rows.length) html += '<p class="hint">이 분류에는 아직 마커가 없어요.</p>';
@@ -282,21 +285,76 @@ function renderFoot() {
   $('#mode').value = state.mode;
 }
 
+/** 구간 k 를 지도에 그릴 좌표: 도로 경로, 못 찾았으면 양 끝을 잇는 직선 */
+function legPath(P, info, k) {
+  const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
+  return info.paths?.[k] || [[seq[k].lat, seq[k].lng], [seq[k + 1].lat, seq[k + 1].lng]];
+}
+const activeLeg = () => hoverLeg ?? selLeg;
+
+/**
+ * 경로선과 방향 화살표 ('route' 레이어). 강조 중인 구간이 있으면 그 구간만 진하게, 나머지는 흐리게.
+ * 계산 중에는 그리지 않고, 도로 경로를 못 찾은 구간만 직선 점선
+ */
+function renderRouteLines() {
+  if (!KMap.ready()) return;
+  KMap.clear('route');
+  const P = routePlan(), info = currentRoute(P);
+  if (P.points.length < 2 || !info) return;
+  const active = activeLeg();
+  info.legs.forEach((leg, k) => {
+    if (leg.km === 0) return;   // 같은 자리
+    const path = legPath(P, info, k), road = !!info.paths?.[k];
+    const on = active == null || active === k;
+    const events = {
+      onClick: () => selectLeg(k),
+      onOver: () => setHoverLeg(k),
+      onOut: () => setHoverLeg(null),
+    };
+    const z = active === k ? 3 : 1;
+    KMap.line('route', path, '#FFFFFF', { weight: active === k ? 11 : 9, opacity: on ? 0.95 : 0.5, dashed: !road, z, ...events });
+    KMap.line('route', path, ROUTE_COLOR, { weight: active === k ? 7 : 5, opacity: on ? 0.95 : 0.25, dashed: !road, z, ...events });
+    if (on && road) KMap.arrows('route', path);
+  });
+}
+
+// 강조를 바꾸면 선을 새로 그리는데, 그때 커서 아래 선이 사라지며 mouseout 이 튈 수 있어서 해제는 잠깐 늦춤
+let hoverOutTimer = null;
+function setHoverLeg(k) {
+  clearTimeout(hoverOutTimer);
+  if (k == null) { hoverOutTimer = setTimeout(() => applyHoverLeg(null), 120); return; }
+  applyHoverLeg(k);
+}
+function applyHoverLeg(k) {
+  if (hoverLeg === k) return;
+  hoverLeg = k;
+  renderRouteLines();
+  markActiveLegRow();
+}
+/** 구간을 눌러 강조를 고정(다시 누르면 해제)하고 지도를 그 구간으로 맞춤 */
+function selectLeg(k) {
+  selLeg = selLeg === k ? null : k;
+  renderRouteLines();
+  markActiveLegRow();
+  if (selLeg != null) {
+    const P = routePlan(), info = currentRoute(P);
+    if (info && KMap.ready()) KMap.fit(legPath(P, info, k));
+    document.querySelector(`li.leg[data-leg="${k}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+function markActiveLegRow() {
+  const k = activeLeg();
+  document.querySelectorAll('li.leg[data-leg]').forEach(el => {
+    el.classList.toggle('active', +el.dataset.leg === k);
+    el.classList.toggle('dim', k != null && +el.dataset.leg !== k);
+  });
+}
+
 function renderMap() {
   if (!KMap.ready()) return;
+  renderRouteLines();
   KMap.clear('manual');
-  const { P, info, num } = routeView();
-  // 계산 중에는 핀만 보여 주고, 구간마다 도로를 따라 그림. 도로 경로를 못 찾은 구간만 직선 점선
-  if (P.points.length >= 2 && info) {
-    const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
-    info.legs.forEach((leg, k) => {
-      if (leg.km === 0) return;   // 같은 자리
-      const road = info.paths?.[k];
-      const path = road || [[seq[k].lat, seq[k].lng], [seq[k + 1].lat, seq[k + 1].lng]];
-      KMap.line('manual', path, '#FFFFFF', { weight: 9, opacity: 0.95, dashed: !road });
-      KMap.line('manual', path, ROUTE_COLOR, { weight: 5, opacity: 0.95, dashed: !road });
-    });
-  }
+  const { P, num } = routeView();
   state.markers.forEach((m, i) => {
     const c = cat(m), inRoute = m.on, isLoopStay = P.stay === m;
     KMap.pin('manual', {
@@ -318,7 +376,7 @@ function openMarkerPopup(i) {
       <button class="btn sm danger" data-act="del" data-i="${i}">삭제</button>
     </div>`);
 }
-function render() { renderList(); renderFoot(); renderMap(); }
+function render() { renderList(); renderFoot(); renderMap(); markActiveLegRow(); }
 
 // ───────────── 장소 검색 (백엔드 → 카카오 로컬) ─────────────
 function markButton(p, src) {
@@ -426,6 +484,20 @@ $('#markers').addEventListener('change', e => {
 });
 $('#mode').addEventListener('change', e => { state.mode = e.target.value; changed(); });
 
+// 구간 행: 마우스를 올리면 지도에서 그 구간만 강조, 누르면 강조 고정(다시 누르면 해제)
+$('#markers').addEventListener('mouseover', e => {
+  const li = e.target.closest('li.leg[data-leg]');
+  if (li) setHoverLeg(+li.dataset.leg);
+});
+$('#markers').addEventListener('mouseout', e => {
+  const li = e.target.closest('li.leg[data-leg]');
+  if (li && !li.contains(e.relatedTarget)) setHoverLeg(null);
+});
+$('#markers').addEventListener('click', e => {
+  const li = e.target.closest('li.leg[data-leg]');
+  if (li && !e.target.closest('a, label, input')) selectLeg(+li.dataset.leg);
+});
+
 // 끌어서 놓기: 마커 행 위에서는 위/아래 절반에 따라 앞/뒤로, 구간 행 위에서는 그 사이로 삽입
 let dragFrom = null;
 const list = $('#markers');
@@ -474,7 +546,7 @@ function showMapError(html) { const el = $('#mapError'); el.innerHTML = `<div>${
   state = load();
   try {
     await KMap.init($('#map'), { appKey: CONFIG.KAKAO_JS_KEY, center: [DEFAULT_VIEW.lat, DEFAULT_VIEW.lng], level: DEFAULT_VIEW.level,
-      onClick: onMapClick, onAction });
+      onClick: onMapClick, onAction, onIdle: renderRouteLines });
   } catch (e) {
     showMapError(`카카오맵을 불러오지 못했어요: ${esc(e.message)}<br>
       카카오 개발자 콘솔 > 앱 > 플랫폼 > Web 에 <b>${esc(location.origin)}</b> 가 등록돼 있는지 확인하세요.`);

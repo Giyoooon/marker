@@ -17,11 +17,19 @@ const KMap = (() => {
     });
   }
 
-  async function init(el, { appKey, center, level, onClick, onAction }) {
+  // 선을 누르면 지도 클릭(마킹 팝업)도 같이 일어나므로, 같은 클릭이면 지도 클릭은 무시
+  let lineClicked = false;
+
+  async function init(el, { appKey, center, level, onClick, onAction, onIdle }) {
     await loadSdk(appKey);
     map = new kakao.maps.Map(el, { center: LL(...center), level });
     map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
-    kakao.maps.event.addListener(map, 'click', e => onClick(e.latLng.getLat(), e.latLng.getLng()));
+    kakao.maps.event.addListener(map, 'click', e => {
+      const lat = e.latLng.getLat(), lng = e.latLng.getLng();
+      setTimeout(() => { if (lineClicked) lineClicked = false; else onClick(lat, lng); }, 0);
+    });
+    // 이동·확대가 끝나면 (화면 간격으로 놓는 화살표를 다시 배치하도록) 알림
+    if (onIdle) kakao.maps.event.addListener(map, 'idle', onIdle);
     KMap.onAction = onAction;
     window.addEventListener('resize', () => map.relayout());
   }
@@ -45,11 +53,44 @@ const KMap = (() => {
     layers[layer].push(ov);
   }
 
-  function line(layer, path, color, { dashed = false, weight = 5, opacity = 0.9 } = {}) {
+  function line(layer, path, color, { dashed = false, weight = 5, opacity = 0.9, z = 1, onClick, onOver, onOut } = {}) {
     const pl = new kakao.maps.Polyline({ path: path.map(([lat, lng]) => LL(lat, lng)), strokeWeight: weight, strokeColor: color,
-      strokeOpacity: opacity, strokeStyle: dashed ? 'shortdash' : 'solid' });
+      strokeOpacity: opacity, strokeStyle: dashed ? 'shortdash' : 'solid', zIndex: z });
+    if (onClick) kakao.maps.event.addListener(pl, 'click', () => { lineClicked = true; onClick(); });
+    if (onOver) kakao.maps.event.addListener(pl, 'mouseover', onOver);
+    if (onOut) kakao.maps.event.addListener(pl, 'mouseout', onOut);
     show(pl, layer);
     layers[layer].push(pl);
+  }
+
+  /**
+   * 경로 위 진행 방향 화살표. 화면에서 spacing(px)마다 하나씩, 지금 보이는 범위 안에만 놓음
+   * (확대 수준에 따라 간격이 달라지므로 지도 idle 때마다 다시 그려야 함)
+   */
+  function arrows(layer, path, { spacing = 90, offset = 45, z = 5 } = {}) {
+    if (path.length < 2) return;
+    const proj = map.getProjection(), bounds = map.getBounds();
+    const px = path.map(([lat, lng]) => proj.containerPointFromCoords(LL(lat, lng)));
+    const total = px.slice(1).reduce((s, p, i) => s + Math.hypot(p.x - px[i].x, p.y - px[i].y), 0);
+    let acc = 0, next = Math.min(offset, total / 2), placed = 0;
+    for (let i = 0; i + 1 < px.length && placed < 200; i++) {
+      const a = px[i], b = px[i + 1], len = Math.hypot(b.x - a.x, b.y - a.y);
+      while (len > 0 && acc + len >= next && next <= total - 20 && placed < 200) {
+        const t = (next - acc) / len;
+        const at = proj.coordsFromContainerPoint(new kakao.maps.Point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+        if (bounds.contain(at)) {
+          const el = document.createElement('div');
+          el.className = 'arrow';
+          el.style.transform = `rotate(${Math.atan2(b.y - a.y, b.x - a.x)}rad)`;
+          const ov = new kakao.maps.CustomOverlay({ position: at, content: el, xAnchor: 0.5, yAnchor: 0.5, zIndex: z });
+          show(ov, layer);
+          layers[layer].push(ov);
+        }
+        next += spacing;
+        placed++;
+      }
+      acc += len;
+    }
   }
 
   function setVisible(layer, on) { visible[layer] = on; layers[layer].forEach(o => o.setMap(on ? map : null)); }
@@ -80,5 +121,5 @@ const KMap = (() => {
   }
   const ready = () => !!map;
 
-  return { init, pin, line, clear, setVisible, openPopup, closePopup, setView, focus, fit, center, ready, onAction: () => {} };
+  return { init, pin, line, arrows, clear, setVisible, openPopup, closePopup, setView, focus, fit, center, ready, onAction: () => {} };
 })();

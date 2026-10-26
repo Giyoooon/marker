@@ -183,3 +183,14 @@ li.leg.drop-on { background: var(--wash); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* 경로 방향 화살표: 빨간 선 위의 흰 삼각형 */
+.arrow { width: 0; height: 0; border-left: 8px solid #fff; border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  filter: drop-shadow(0 0 1px rgba(150, 20, 30, .6)); pointer-events: none; }
+
+/* 구간 강조: 목록 행과 지도의 선이 같이 움직임 */
+li.leg[data-leg] { cursor: pointer; transition: background .12s, opacity .12s; }
+li.leg[data-leg]:hover, li.leg.active { background: #FFF0F1; }
+li.leg.active::before { border-left: 2px solid #E8283C; }
+li.leg.active .what b { color: #C2172B; }
+li.leg.dim { opacity: .45; }
