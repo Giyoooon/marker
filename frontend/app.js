@@ -92,7 +92,7 @@ const isMarked = p => state.markers.some(m => posKey(m) === posKey(p));
 function mark(p) {
   if (!Room.canWrite()) return;   // 공유 지도에선 닉네임부터
   if (isMarked(p)) { toast('이미 마킹한 곳이에요'); return; }
-  if (state.markers.length >= MAX_MARKERS) { toast(`마커는 ${MAX_MARKERS}개까지 꽂을 수 있어요`); return; }
+  if (state.markers.length >= MAX_MARKERS) { toast(`마커는 ${MAX_MARKERS}개까지 새길 수 있어요`); return; }
   const m = pick({ name: p.name || '이름 없는 곳', lat: p.lat, lng: p.lng, cat: p.cat });
   state.markers.splice(onCount(), 0, m);   // 경로 맨 끝 (뺀 마커들보다 앞)
   KMap.ready() && KMap.closePopup();
@@ -224,7 +224,7 @@ function renderList() {
   const M = state.markers, { P, info, num, legAfter, firstLeg } = routeView();
   const box = $('#markers');
   if (!M.length) {
-    box.innerHTML = `<p class="hint">위에서 장소를 검색해 <b>마킹</b>하거나, 지도를 눌러 원하는 자리에 핀을 꽂으세요.<br>
+    box.innerHTML = `<p class="hint">위에서 장소를 검색해 <b>마킹</b>하거나, 지도를 눌러 원하는 자리에 핀을 새기세요.<br>
       목록 순서대로 경로가 이어지고, 체크를 끄면 경로에서 빠져요.</p>`;
     return;
   }
@@ -462,11 +462,11 @@ $('#searchForm').addEventListener('submit', async e => {
   const near = KMap.ready() ? KMap.center() : DEFAULT_VIEW;
   try {
     searchResults = await api(`/api/search?${new URLSearchParams({ q, lat: near.lat, lng: near.lng })}`);
-    if (!searchResults.length) { box.innerHTML = '<p class="hint">검색 결과가 없어요. 다른 이름으로 찾거나 지도를 눌러 직접 꽂으세요.</p>'; return; }
+    if (!searchResults.length) { box.innerHTML = '<p class="hint">검색 결과가 없어요. 다른 이름으로 찾거나 지도를 눌러 직접 새기세요.</p>'; return; }
     renderResults();
     KMap.ready() && KMap.fit(searchResults.map(r => [r.lat, r.lng]));
   } catch (err) {
-    box.innerHTML = `<p class="hint">검색하지 못했어요 (${esc(err.message)}). 지도를 눌러 직접 꽂을 수 있어요.</p>`;
+    box.innerHTML = `<p class="hint">검색하지 못했어요 (${esc(err.message)}). 지도를 눌러 직접 새길 수 있어요.</p>`;
   }
 });
 function closeResults() {

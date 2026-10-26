@@ -185,7 +185,7 @@ export async function addMarker(db: D1Database, code: string, body: unknown) {
   const lat = coord(body.lat, 'lat', 32, 39.5), lng = coord(body.lng, 'lng', 124, 132);
   const c = cat(body.cat);
   const count = await db.prepare('SELECT COUNT(*) AS n FROM markers WHERE map_code = ?').bind(code).first<{ n: number }>();
-  if ((count?.n ?? 0) >= MAX_MARKERS) throw new Conflict(`마커는 지도마다 ${MAX_MARKERS}개까지 꽂을 수 있어요`);
+  if ((count?.n ?? 0) >= MAX_MARKERS) throw new Conflict(`마커는 지도마다 ${MAX_MARKERS}개까지 새길 수 있어요`);
   try {
     const row = await db.prepare(
       'INSERT INTO markers (map_code, marked_by, name, lat, lng, cat, included, position) VALUES (?, ?, ?, ?, ?, ?, 1, ?) RETURNING id',

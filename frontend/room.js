@@ -355,7 +355,7 @@ const Room = (() => {
     openDialog(`
       <div class="landing">
         <span class="landing-pin" aria-hidden="true"></span>
-        <h2>${justCreated ? '공유 지도를 만들었어요' : '같이 꽂을 사람에게 알려 주세요'}</h2>
+        <h2>${justCreated ? '공유 지도를 만들었어요' : '같이 새길 사람에게 알려 주세요'}</h2>
         <p class="hint">${esc(room.title)}. 친구가 첫 화면에서 이 번호를 넣거나 링크를 열면 같이 마킹할 수 있어요.</p>
         <div class="code-show" aria-label="지도 번호">${[...room.code].map(ch => `<span>${ch}</span>`).join('')}</div>
         <p class="share-link" title="${esc(url)}">${esc(url.replace(/^https?:\/\//, ''))}</p>
