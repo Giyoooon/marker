@@ -265,7 +265,7 @@ function renderFoot() {
   let html = '';
   if (info) {
     html = `<span class="big">${human(info.totalMin)}</span><span class="big">${info.totalKm}km</span>
-      <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${info.source === 'kakao' ? '' : ', 직선거리 추정'}</span>`;
+      <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${info.source !== 'kakao' ? ', 직선거리 추정' : state.mode === 'car' ? '' : ', 도로 거리로 추정'}</span>`;
   } else if (P.points.length >= 2) {
     html = '<span class="muted">경로를 계산하고 있어요…</span>';
   } else if (state.markers.length) {
@@ -280,11 +280,12 @@ function renderMap() {
   if (!KMap.ready()) return;
   KMap.clear('manual');
   const { P, info, num } = routeView();
-  if (P.points.length >= 2) {
+  // 계산 중에는 핀만 보여 주고, 도로 경로를 받으면 도로를 따라 그림. 직선 점선은 도로 경로를 못 받았을 때만
+  if (P.points.length >= 2 && info) {
     const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
-    const path = info?.path || seq.map(p => [p.lat, p.lng]);
-    KMap.line('manual', path, '#FFFFFF', { weight: 9, opacity: 0.9, dashed: !info?.path });
-    KMap.line('manual', path, ROUTE_COLOR, { weight: 5, opacity: 0.9, dashed: !info?.path });
+    const path = info.path || seq.map(p => [p.lat, p.lng]);
+    KMap.line('manual', path, '#FFFFFF', { weight: 9, opacity: 0.9, dashed: !info.path });
+    KMap.line('manual', path, ROUTE_COLOR, { weight: 5, opacity: 0.9, dashed: !info.path });
   }
   state.markers.forEach((m, i) => {
     const c = cat(m), inRoute = m.on, isLoopStay = P.stay === m;

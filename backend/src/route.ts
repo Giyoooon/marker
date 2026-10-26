@@ -22,16 +22,31 @@ export interface RouteResponse {
 /** 이 거리(km) 안에 연달아 찍힌 마커는 같은 자리로 보고 이동 0 */
 const SAME_SPOT_KM = 0.02;
 
+/**
+ * 카카오모빌리티 자동차 경로의 구간(도로 거리 km, 자동차 분)으로 이동수단별 시간 계산.
+ * 도보·대중교통은 카카오 API가 없어서, 직선이 아닌 실제 도로 거리를 기준으로 추정
+ */
+export function legFromRoad(mode: Mode, roadKm: number, carMin: number): RouteLeg {
+  const walk = (roadKm / 4.5) * 60;
+  if (mode === 'walk') return { min: walk, km: roadKm, walk: true };
+  if (mode === 'transit') {
+    const ride = carMin * 1.5 + 10;   // 버스는 자동차보다 느리고, 기다리고 갈아타는 시간 10분
+    return walk <= ride || roadKm < 0.8 ? { min: walk, km: roadKm, walk: true } : { min: ride, km: roadKm, walk: false };
+  }
+  return { min: carMin, km: roadKm, walk: false };
+}
+
 export async function route(req: RouteRequest, env: Env): Promise<RouteResponse> {
   const { mode } = req;
   const warnings: string[] = [];
-  const key = mode === 'car' ? env.KAKAO_REST_KEY : undefined;
-  if (mode === 'car' && !key) warnings.push('서버에 카카오 REST 키가 설정되지 않아 직선거리로 추정했어요.');
+  const key = env.KAKAO_REST_KEY;
+  if (!key) warnings.push('서버에 카카오 REST 키가 설정되지 않아 직선거리로 추정했어요.');
 
   let order = req.points.map((_, i) => i);
   if (req.optimize && req.points.length > 2) {
     let M = estimateMatrix(req.points, mode);
-    if (key) {
+    // 자동차 소요시간은 카카오 실측. 도보·대중교통 순서는 직선거리 추정으로 충분히 가려짐
+    if (key && mode === 'car') {
       try { M = await kakaoMatrix(key, req.points); }
       catch (e) { warnings.push(`실제 이동시간을 못 불러와 직선거리 기준으로 정렬했어요(${errMsg(e)}).`); }
     }
@@ -54,10 +69,11 @@ export async function route(req: RouteRequest, env: Env): Promise<RouteResponse>
   const kept = points.map((_, i) => i).filter(i => !same[i]);
   if (key && kept.length >= 2) {
     try {
+      // 이동수단과 상관없이 도로를 따라 그릴 경로와 도로 거리를 받아 옴
       const r = await waypointsRoute(key, kept.map(i => points[i]));
       // section k 는 kept[k] → kept[k+1] 이고, 그 사이 마커는 모두 kept[k] 와 같은 자리
       r.sections.forEach((s, k) => {
-        legs[kept[k + 1] - 1] = { min: s.duration / 60, km: s.distance / 1000, walk: false };
+        legs[kept[k + 1] - 1] = legFromRoad(mode, s.distance / 1000, s.duration / 60);
       });
       path = r.path;
       source = 'kakao';

@@ -54,6 +54,21 @@ describe('route (카카오)', () => {
     expect(res.path).toHaveLength(3);
   });
 
+  it('도보·대중교통도 도로를 따라 그리고, 시간은 도로 거리로 추정한다', async () => {
+    const kakao = () => new Response(JSON.stringify({ routes: [{ result_code: 0, result_msg: 'ok', sections: [
+      { duration: 600, distance: 4500, roads: [{ vertexes: [128.6286, 35.8794, 128.61, 35.875, 128.5960, 35.8690] }] },
+    ] }] }));
+    vi.stubGlobal('fetch', vi.fn(async () => kakao()));
+    const walk = await route({ mode: 'walk', points: [A, B] }, { KAKAO_REST_KEY: 'k' });
+    expect(walk.source).toBe('kakao');
+    expect(walk.path).toHaveLength(3);                          // 직선(2점)이 아니라 도로 좌표
+    expect(walk.legs[0]).toEqual({ min: 60, km: 4.5, walk: true }); // 4.5km ÷ 4.5km/h
+
+    const transit = await route({ mode: 'transit', points: [A, B] }, { KAKAO_REST_KEY: 'k' });
+    expect(transit.path).toHaveLength(3);
+    expect(transit.legs[0]).toEqual({ min: 25, km: 4.5, walk: false }); // 자동차 10분 × 1.5 + 10
+  });
+
   it('카카오 호출이 실패하면 추정값으로 대신한다', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 401 })));
     const res = await route({ mode: 'car', points: [A, C] }, { KAKAO_REST_KEY: 'k' });
