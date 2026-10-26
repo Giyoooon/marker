@@ -175,7 +175,7 @@ const Room = (() => {
   // ───────── 들어가기 ─────────
   async function enter(rawCode) {
     const code = String(rawCode).trim().toUpperCase();
-    if (!/^[A-Z0-9]{4}$/.test(code)) { toast('지도 번호는 영문·숫자 4자리예요'); return false; }
+    if (!/^[A-Z0-9]{4}$/.test(code)) { toast('지도 코드는 영문·숫자 4자리예요'); return false; }
     let data;
     try { data = await call('GET', `/api/maps/${code}`); }
     catch (e) { toast(e.status === 404 ? `${code} 지도가 없어요` : `공유 지도를 열지 못했어요: ${e.message}`); return false; }
@@ -261,7 +261,7 @@ const Room = (() => {
       : `<span class="muted">지금은 나만 있어요${viewing}</span>`;
     bar.innerHTML = `
       <div class="room-top">
-        <button class="room-code" data-act="roomShare" title="번호·링크 공유">${room.code}</button>
+        <button class="room-code" data-act="roomShare" title="코드·링크 공유">${room.code}</button>
         <button class="room-title" data-act="roomRename" title="제목 바꾸기">${esc(room.title)}</button>
         <button class="link-btn activity-btn" data-act="roomActivity" aria-expanded="${!!$('#activity')?.open}">활동${unseen ? `<span class="dot-n">${unseen}</span>` : ''}</button>
         <button class="link-btn" data-act="roomLeave">내 지도로</button>
@@ -360,12 +360,12 @@ const Room = (() => {
       <div class="landing">
         <span class="landing-pin" aria-hidden="true"></span>
         <h2>${justCreated ? '공유 지도를 만들었어요' : '같이 새길 사람에게 알려 주세요'}</h2>
-        <p class="hint">${esc(room.title)}. 친구가 첫 화면에서 이 번호를 넣거나 링크를 열면 같이 마킹할 수 있어요.</p>
-        <div class="code-show" aria-label="지도 번호">${[...room.code].map(ch => `<span>${ch}</span>`).join('')}</div>
+        <p class="hint">${esc(room.title)}. 친구가 첫 화면에서 이 코드를 넣거나 링크를 열면 같이 마킹할 수 있어요.</p>
+        <div class="code-show" aria-label="지도 코드">${[...room.code].map(ch => `<span>${ch}</span>`).join('')}</div>
         <p class="share-link" title="${esc(url)}">${esc(url.replace(/^https?:\/\//, ''))}</p>
       </div>
       <div class="landing-actions">
-        <button class="btn" value="copyCode">번호 복사</button>
+        <button class="btn" value="copyCode">코드 복사</button>
         <button class="btn" value="copyLink">링크 복사</button>
         <button class="btn primary" value="close">${justCreated ? '시작하기' : '닫기'}</button>
       </div>
@@ -378,7 +378,7 @@ const Room = (() => {
         await navigator.clipboard.writeText(text);
         const btn = form.querySelector(`[value=${value}]`);
         btn.textContent = '복사했어요';
-        setTimeout(() => { btn.textContent = value === 'copyCode' ? '번호 복사' : '링크 복사'; }, 1500);
+        setTimeout(() => { btn.textContent = value === 'copyCode' ? '코드 복사' : '링크 복사'; }, 1500);
       } catch { prompt('아래 내용을 복사하세요', text); }
       return false;
     });
@@ -394,9 +394,9 @@ const Room = (() => {
       <div class="landing">
         <span class="landing-pin" aria-hidden="true"></span>
         <h2>같이 새겨요</h2>
-        <p class="hint">친구에게 받은 지도 번호를 넣으면 같은 지도에 같이 마킹할 수 있어요.</p>
+        <p class="hint">친구에게 받은 지도 코드를 넣으면 같은 지도에 같이 마킹할 수 있어요.</p>
         <input class="code-box" name="code" maxlength="4" placeholder="A1B2" autocomplete="off" autocapitalize="characters"
-          spellcheck="false" aria-label="지도 번호 4자리" aria-describedby="codeMsg">
+          spellcheck="false" aria-label="지도 코드 4자리" aria-describedby="codeMsg">
         <p class="code-msg" id="codeMsg" role="alert"></p>
       </div>
       <div class="landing-actions">
@@ -417,7 +417,7 @@ const Room = (() => {
         location.href = `${location.pathname}?map=${code}`;
         return false;   // 이동할 때까지 창 유지
       } catch (e) {
-        msg.textContent = e.status === 404 ? `${code} 지도는 없어요. 번호를 다시 확인해 주세요` : `지도를 열지 못했어요 (${e.message})`;
+        msg.textContent = e.status === 404 ? `${code} 지도는 없어요. 코드를 다시 확인해 주세요` : `지도를 열지 못했어요 (${e.message})`;
         btn.disabled = false; btn.textContent = '같이하기';
         box.select();
         return false;
@@ -436,7 +436,7 @@ const Room = (() => {
     const n = state.markers.length;
     openDialog(`
       <h2>새 공유 지도</h2>
-      <p class="hint">만들면 4자리 번호가 생겨요. 번호를 아는 사람은 누구나 같이 마킹할 수 있어요.</p>
+      <p class="hint">만들면 4자리 코드가 생겨요. 코드를 아는 사람은 누구나 같이 마킹할 수 있어요.</p>
       <label class="dlg-label" for="ttl">지도 제목</label>
       <input id="ttl" name="title" maxlength="60" placeholder="예: 대구 1박 2일">
       <label class="dlg-label" for="nick2">내 닉네임</label>

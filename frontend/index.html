@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>마커-같이 새기자</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
@@ -11,6 +11,8 @@
 <body>
 <div id="app">
   <aside id="side">
+    <!-- 모바일 바텀시트 손잡이: 누르면 접기·반·펼치기 순서로, 끌어서 높이 조절 (데스크톱에선 숨김) -->
+    <button class="sheet-handle" id="sheetHandle" type="button" aria-label="목록 펼치기"><span></span></button>
     <header>
       <div class="brand">
         <h1><span class="logo" aria-hidden="true"></span>마커</h1>
@@ -49,5 +51,6 @@
 <script src="map.js"></script>
 <script src="room.js"></script>
 <script src="app.js"></script>
+<script src="sheet.js"></script>
 </body>
 </html>

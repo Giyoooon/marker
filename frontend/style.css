@@ -177,13 +177,6 @@ li.leg.drop-on { background: var(--wash); }
   font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .18s, transform .18s; pointer-events: none; z-index: 9999; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 
-@media (max-width: 860px) {
-  #app { grid-template-columns: 1fr; grid-template-rows: 46vh auto; height: auto; min-height: 100vh; }
-  #mapWrap { grid-row: 1; height: 46vh; position: sticky; top: 0; z-index: 1; }
-  #side { grid-row: 2; border-right: 0; }
-  #markers { overflow: visible; }
-  .foot { position: sticky; bottom: 0; }
-}
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
@@ -296,3 +289,41 @@ dialog#dlg .redo { align-self: center; margin-top: 12px; padding: 4px 8px; text-
 dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor; }
 .room-people .share-chip { flex: none; padding: 3px 9px; font-size: 12px; background: var(--paper); border-color: #D5D9E1; color: var(--ink); }
 .room-people .share-chip:hover { border-color: var(--ink); }
+
+/* ── 모바일: 지도는 화면 전체, 목록은 아래에서 올라오는 시트 ──
+   페이지 자체는 스크롤하지 않아서 지도 위 터치는 항상 지도가 받음 (시트 안 목록만 스크롤) */
+.sheet-handle { display: none; }
+@media (max-width: 860px) {
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  #app { display: block; height: 100dvh; }
+  #mapWrap { position: fixed; inset: 0; height: auto; }
+  #map { touch-action: none; }   /* 지도 위 손가락 동작은 브라우저 스크롤·확대가 아니라 지도로 */
+  #side {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    height: var(--sheet-h, 45dvh); max-height: calc(100dvh - 48px);
+    border-right: 0; border-radius: 18px 18px 0 0; box-shadow: 0 -6px 28px rgba(30, 42, 68, .18);
+    transition: height .22s ease-out; overflow: hidden;
+  }
+  #side.dragging { transition: none; }
+  .sheet-handle { display: grid; place-items: center; flex: none; width: 100%; height: 22px; padding: 0; border: 0; background: none;
+    cursor: grab; touch-action: none; }
+  .sheet-handle span { width: 40px; height: 5px; border-radius: 999px; background: #C9CED8; }
+  header { padding-top: 0; }
+  #markers { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .foot { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  /* 접힌 상태: 손잡이·제목·검색만 보이고 목록·아래 바는 숨김 */
+  #side.peek #markers, #side.peek .foot { visibility: hidden; }
+  /* 손가락으로 누르기 쉽게, iOS 가 입력할 때 확대하지 않게(16px) */
+  input, select { font-size: 16px; }
+  .icon-btn { width: 34px; height: 34px; font-size: 14px; }
+  li.row label.cat { width: 32px; height: 32px; }
+  li.row .grip { display: none; }   /* 모바일 끌어서 놓기는 브라우저가 지원하지 않아 ▲▼ 만 */
+  #results { max-height: 38dvh; }
+  .popup { max-width: min(290px, calc(100vw - 32px)); }
+}
+@media (max-width: 860px) and (prefers-reduced-motion: reduce) { #side { transition: none; } }
+@media (max-width: 860px) {
+  /* 아래는 시트가 가리므로 알림은 위에서 */
+  .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)); transform: translate(-50%, -8px); max-width: calc(100vw - 32px); text-align: center; }
+  .toast.on { transform: translate(-50%, 0); }
+}

@@ -74,7 +74,7 @@ function cat(v: unknown): string {
 }
 export function normalizeCode(code: string): string {
   const c = code.toUpperCase();
-  if (!CODE.test(c)) throw new BadRequest('지도 번호는 영문 대문자와 숫자 4자리예요');
+  if (!CODE.test(c)) throw new BadRequest('지도 코드는 영문 대문자와 숫자 4자리예요');
   return c;
 }
 function randomCode(): string {
@@ -86,7 +86,7 @@ const isUniqueError = (e: unknown) => /UNIQUE constraint failed/i.test(String(e)
 // ───────── 조회 ─────────
 async function getMapRow(db: D1Database, code: string): Promise<MapRow> {
   const row = await db.prepare('SELECT * FROM maps WHERE code = ?').bind(code).first<MapRow>();
-  if (!row) throw new NotFound('없는 지도 번호예요');
+  if (!row) throw new NotFound('없는 지도 코드예요');
   return row;
 }
 /** 이 지도의 닉네임인지 확인. 바꾸는 요청은 모두 이걸로 누가 했는지 확인함 */
@@ -141,7 +141,7 @@ export async function createMap(db: D1Database, body: unknown) {
     const member = await db.prepare('INSERT INTO members (map_code, nickname) VALUES (?, ?) RETURNING *').bind(code, nickname).first<MemberRow>();
     return { map: mapOut(await getMapRow(db, code)), member: memberOut(member!) };
   }
-  throw new Error('지도 번호를 만들지 못했어요');
+  throw new Error('지도 코드를 만들지 못했어요');
 }
 
 export async function updateMap(db: D1Database, code: string, body: unknown) {

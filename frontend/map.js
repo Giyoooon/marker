@@ -112,14 +112,23 @@ const KMap = (() => {
 
   const center = () => { const c = map.getCenter(); return { lat: c.getLat(), lng: c.getLng() }; };
   function setView(lat, lng, level) { if (level) map.setLevel(level); map.setCenter(LL(lat, lng)); }
-  function focus(lat, lng) { if (map.getLevel() > 4) map.setLevel(4); map.panTo(LL(lat, lng)); }
+  /** 화면 아래를 가리는 높이(px). 모바일 바텀시트가 열려 있으면 그만큼 피해서 보여 줌 */
+  let coverBottom = () => 0;
+  function setCoverBottom(fn) { coverBottom = fn; }
+  function focus(lat, lng) {
+    if (map.getLevel() > 4) map.setLevel(4);
+    map.setCenter(LL(lat, lng));
+    const cover = coverBottom();
+    if (cover) map.panBy(0, Math.round(cover / 2));   // 가려지지 않은 부분의 가운데로
+  }
   function fit(points) {
     if (!points.length) return;
     const b = new kakao.maps.LatLngBounds();
     points.forEach(([lat, lng]) => b.extend(LL(lat, lng)));
-    map.setBounds(b, 40, 40, 40, 40);
+    map.setBounds(b, 40, 40, 40 + coverBottom(), 40);
   }
   const ready = () => !!map;
 
-  return { init, pin, line, arrows, clear, setVisible, openPopup, closePopup, setView, focus, fit, center, ready, onAction: () => {} };
+  return { init, pin, line, arrows, clear, setVisible, openPopup, closePopup, setView, focus, fit, center, ready, setCoverBottom,
+    relayout: () => map && map.relayout(), onAction: () => {} };
 })();
