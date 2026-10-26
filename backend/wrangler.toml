@@ -1,6 +1,7 @@
 name = "marker-api"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
+account_id = "41a5668f3ab9fce48ef416ed5e67ba88"
 
 [vars]
 # 브라우저에서 이 API를 호출할 수 있는 출처 (쉼표로 구분)

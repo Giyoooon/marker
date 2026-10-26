@@ -52,7 +52,9 @@ npx http-server frontend -p 8080   # http://localhost:8080
 
 ## 배포
 
-백엔드:
+백엔드 (자동): 저장소 Secrets 에 `CLOUDFLARE_API_TOKEN` 을 등록하면 `backend/` 변경을 push 할 때마다 테스트 후 배포됨.
+
+백엔드 (수동):
 ```bash
 cd backend
 npx wrangler login

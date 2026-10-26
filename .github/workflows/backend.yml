@@ -1,0 +1,33 @@
+name: Deploy backend to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**', '.github/workflows/backend.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: backend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # 저장소 Settings > Secrets and variables > Actions > Secrets 의 CLOUDFLARE_API_TOKEN 사용
+      # (KAKAO_REST_KEY 는 Cloudflare 에 저장돼 있어 배포해도 유지됨)
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
