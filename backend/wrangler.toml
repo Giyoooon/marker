@@ -1,0 +1,11 @@
+name = "marker-api"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+[vars]
+# 브라우저에서 이 API를 호출할 수 있는 출처 (쉼표로 구분)
+ALLOWED_ORIGINS = "https://giyoooon.github.io,http://localhost:8080,http://127.0.0.1:8080"
+
+# KAKAO_REST_KEY 는 비밀값이라 여기 두지 않음
+#   로컬: backend/.dev.vars 에 KAKAO_REST_KEY=...
+#   배포: npx wrangler secret put KAKAO_REST_KEY

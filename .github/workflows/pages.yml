@@ -1,0 +1,38 @@
+name: Deploy frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['frontend/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      # 저장소 Settings > Secrets and variables > Actions > Variables 에 등록한 값으로 config.js 생성
+      - name: Write config.js
+        env:
+          KAKAO_JS_KEY: ${{ vars.KAKAO_JS_KEY }}
+          API_BASE: ${{ vars.API_BASE }}
+        run: |
+          printf 'window.MARKER_CONFIG = { KAKAO_JS_KEY: "%s", API_BASE: "%s" };\n' "$KAKAO_JS_KEY" "$API_BASE" > frontend/config.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend
+      - id: deployment
+        uses: actions/deploy-pages@v4
