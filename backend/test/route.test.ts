@@ -63,6 +63,24 @@ describe('route (카카오)', () => {
   });
 });
 
+describe('route optimize', () => {
+  it('첫 마커는 그대로 두고 최단 순서로 바꾼 뒤 그 순서로 구간을 돌려준다', async () => {
+    // 동대구역 출발, 수성못(멀리) → 동성로 → 동성로 근처 순으로 찍었을 때
+    const res = await route({ mode: 'walk', optimize: true, points: [A, C, B, B2] }, {});
+    expect(res.order[0]).toBe(0);
+    // 동대구역 → 동성로·동성로 옆(10m 차이라 둘 중 어느 쪽이 먼저든 같음) → 수성못
+    expect(res.order[3]).toBe(1);
+    expect(res.order.slice(1, 3).sort()).toEqual([2, 3]);
+    expect(res.legs).toHaveLength(3);
+    expect(res.legs[1]).toEqual({ min: 0, km: 0, walk: true });
+  });
+
+  it('optimize 가 아니면 순서를 바꾸지 않는다', async () => {
+    const res = await route({ mode: 'walk', points: [A, C, B] }, {});
+    expect(res.order).toEqual([0, 1, 2]);
+  });
+});
+
 describe('validateRoute', () => {
   it('2곳 미만, 32곳 초과, 잘못된 좌표를 거른다', () => {
     expect(() => validateRoute({ points: [A] })).toThrow(/최소 2곳/);

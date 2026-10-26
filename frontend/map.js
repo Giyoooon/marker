@@ -2,7 +2,7 @@
 const KMap = (() => {
   let map = null, popup = null;
   const layers = { base: [], route: [], manual: [] };
-  const visible = { base: true, route: true, manual: false };
+  const visible = { base: true, route: true, manual: true };
   const show = (o, layer) => o.setMap(visible[layer] ? map : null);
   const LL = (lat, lng) => new kakao.maps.LatLng(lat, lng);
 
@@ -62,6 +62,7 @@ const KMap = (() => {
   }
   function closePopup() { if (popup) { popup.setMap(null); popup = null; } }
 
+  const center = () => { const c = map.getCenter(); return { lat: c.getLat(), lng: c.getLng() }; };
   function setView(lat, lng, level) { if (level) map.setLevel(level); map.setCenter(LL(lat, lng)); }
   function focus(lat, lng) { if (map.getLevel() > 4) map.setLevel(4); map.panTo(LL(lat, lng)); }
   function fit(points) {
@@ -72,5 +73,5 @@ const KMap = (() => {
   }
   const ready = () => !!map;
 
-  return { init, pin, line, clear, setVisible, openPopup, closePopup, setView, focus, fit, ready, onAction: () => {} };
+  return { init, pin, line, clear, setVisible, openPopup, closePopup, setView, focus, fit, center, ready, onAction: () => {} };
 })();

@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>마커 — 우리끼리 여행 경로 짜기</title>
+<title>마커 — 찍고, 순서 정하고, 경로 보기</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
   <aside id="side">
     <header>
-      <h1>🗺️ 마커 — 우리끼리 여행 경로 짜기</h1>
-      <p>고정 일정을 넣고 가고 싶은 곳을 고르면 시간에 맞춰 동선을 짜 드려요.</p>
+      <h1>📍 마커</h1>
+      <p>장소를 마킹하고 순서를 정하면 그 순서대로 경로를 그려요.</p>
     </header>
     <div class="search">
       <form id="searchForm">
@@ -20,20 +20,14 @@
       </form>
       <div id="results"></div>
     </div>
-    <nav class="tabs">
-      <button data-tab="setup" class="on">기본 설정</button>
-      <button data-tab="fixed">고정 일정<span class="badge" id="nFixed">0</span></button>
-      <button data-tab="spots">가볼 곳<span class="badge" id="nSpots">0</span></button>
-      <button data-tab="route">내 경로<span class="badge" id="nRoute">0</span></button>
-      <button data-tab="plan">결과</button>
-    </nav>
-    <section class="tab on" id="tab-setup"></section>
-    <section class="tab" id="tab-fixed"></section>
-    <section class="tab" id="tab-spots"></section>
-    <section class="tab" id="tab-route"></section>
-    <section class="tab" id="tab-plan"><p class="hint">아래 <b>경로 짜기</b>를 누르면 여기에 일정이 나와요.</p></section>
+    <section id="markers"></section>
     <div class="foot">
-      <button class="btn primary" id="planBtn" data-act="plan">🧭 경로 짜기</button>
+      <select id="mode" title="이동수단">
+        <option value="car">🚗 자동차</option>
+        <option value="transit">🚌 대중교통</option>
+        <option value="walk">🚶 도보</option>
+      </select>
+      <button class="btn primary" id="optBtn" data-act="optimize" title="첫 번째 마커를 출발지로 두고 나머지를 이동시간이 가장 짧은 순서로">✨ 최단 순서로 정렬</button>
       <button class="btn" data-act="share" title="친구에게 보낼 링크 복사">🔗 공유</button>
     </div>
   </aside>

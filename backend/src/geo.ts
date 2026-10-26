@@ -29,12 +29,3 @@ export function estimateLeg(a: Place, b: Place, mode: Mode): Leg {
   return preferWalk(km, ride);
 }
 
-export function toMin(s: string): number {
-  const [h, m] = s.split(':').map(Number);
-  return h * 60 + (m || 0);
-}
-
-export function hhmm(min: number): string {
-  const m = Math.round(min);
-  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-}

@@ -1,15 +1,11 @@
-// marker-api — 여행 경로 계획 API (Cloudflare Worker)
+// marker-api — 마커 경로 API (Cloudflare Worker)
 //   GET  /api/health              서버 상태, 카카오 키 설정 여부
-//   GET  /api/regions             지역별 추천 명소
 //   GET  /api/search?q=&lat=&lng= 카카오 장소 검색
-//   POST /api/plan                일정 최적화 (요청 형식은 src/types.ts 의 PlanRequest)
-//   POST /api/route               정한 순서대로 경로 계산 (요청 형식은 src/route.ts 의 RouteRequest)
+//   POST /api/route               마커 순서대로 경로 계산, optimize 면 최단 순서로 정렬 (형식: src/route.ts)
 import { KakaoError, searchKeyword } from './kakao';
-import { plan } from './plan';
-import { REGIONS } from './regions';
 import { route } from './route';
 import type { Env } from './types';
-import { BadRequest, validatePlan, validateRoute } from './validate';
+import { BadRequest, validateRoute } from './validate';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers } });
@@ -37,15 +33,13 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
 
   if (path === '/api/health') return json({ ok: true, kakao: !!env.KAKAO_REST_KEY });
 
-  if (path === '/api/regions' && req.method === 'GET') {
-    return json(REGIONS, 200, { 'Cache-Control': 'public, max-age=3600' });
-  }
-
   if (path === '/api/search' && req.method === 'GET') {
     const q = url.searchParams.get('q')?.trim();
     if (!q) throw new BadRequest('q: 검색어가 필요해요');
     if (!env.KAKAO_REST_KEY) return json({ error: '서버에 카카오 REST 키가 설정되지 않았어요' }, 503);
-    const lat = Number(url.searchParams.get('lat')), lng = Number(url.searchParams.get('lng'));
+    // 지도 중심 좌표로 검색 결과를 가까운 순으로 보정. 캐시가 잘 맞도록 1km 정도로 반올림
+    const round = (v: string | null) => Math.round(Number(v) * 100) / 100;
+    const lat = round(url.searchParams.get('lat')), lng = round(url.searchParams.get('lng'));
     const near = Number.isFinite(lat) && Number.isFinite(lng) && lat && lng ? { lat, lng } : undefined;
 
     // 같은 검색은 하루 동안 캐시
@@ -55,10 +49,6 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     const res = json(await searchKeyword(env.KAKAO_REST_KEY, q, near), 200, { 'Cache-Control': 'public, max-age=86400' });
     ctx.waitUntil(caches.default.put(cacheKey, res.clone()));
     return res;
-  }
-
-  if (path === '/api/plan' && req.method === 'POST') {
-    return json(await plan(validatePlan(await readJson(req)), env));
   }
 
   if (path === '/api/route' && req.method === 'POST') {
