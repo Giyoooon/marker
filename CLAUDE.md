@@ -97,7 +97,9 @@ frontend/   정적 페이지, 빌드 없음
 backend/    Cloudflare Worker (TypeScript)
   index.ts    라우터·CORS: /api/health, /api/search, /api/route, /api/leg(도로 구간 6시간 캐시), /api/maps...
   shared.ts   공유 지도 API (D1). 맨 위 주석에 엔드포인트 목록. 바꾸는 함수는 { ..., event } 를 돌려줌
-  room.ts     지도 방 Durable Object (웹소켓 Hibernation API). presenceOf 는 순수 함수
+  room.ts     지도 방 Durable Object (웹소켓 Hibernation API). presenceOf·admitError 는 순수 함수
+  security.ts 봇 대비: 요청 수 제한(바인딩+Guard), 웹소켓 출처·연결 수, robots
+  guard.ts    IP 마다 정확한 요청 수 제한 Durable Object
   route.ts    경로 계산: routeLeg(한 구간, /api/leg), route(순서 최적화·왕복, orderOnly 면 순서만)
   order.ts    방문 순서 최적화 (최근접 이웃 + 2-opt + or-opt, 순수 함수)
   matrix.ts   이동시간 행렬 (카카오 다중 목적지 / 직선거리 추정)
@@ -110,7 +112,7 @@ backend/    Cloudflare Worker (TypeScript)
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest (54개)
+cd backend && npm test          # vitest (67개)
 cd backend && npm run typecheck
 cd backend && npx wrangler d1 migrations apply marker --local   # 로컬 DB 준비
 cd backend && npm run dev       # http://localhost:8787 (카카오 키 없으면 추정값으로 동작)
@@ -174,6 +176,16 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
 - 웹소켓 접속은 `ALLOWED_ORIGINS` 출처만. memberId 는 Worker 가 D1 에서 확인한 뒤 닉네임과 함께 방에 넘김 (모르는 id 면 구경)
 - 웹소켓 메시지로는 아무것도 바꾸지 않음(ping 만). 변경은 반드시 HTTP API 로
 - 테스트는 `cloudflare:workers` 를 stub 으로 바꿔서 Node 에서 (vitest.config.ts alias). 실제 웹소켓은 `wrangler dev` 로 확인
+
+### 보안 (봇·자동화 대비, backend/src/security.ts)
+- **요청 수 제한 두 겹 (IP 마다, 기능별)**
+  1. `[[ratelimits]]` 바인딩(wrangler.toml, RL_*): 모든 기능. 단 Cloudflare 위치별 근사치라 **실서비스에서 몰림·지속 요청 모두 막지 못했음**(2026-10-27 측정: 로컬에선 정확히 막힘) → 참고용 첫 겹
+  2. `Guard` Durable Object(src/guard.ts, IP 마다 하나, 60초 슬라이딩 윈도): 정확. 봇 대비 핵심만 — 없는 코드 조회(코드 맞히기) 10/분, 웹소켓 연결 20/분, 지도 만들기 3/분, 닉네임 10/분 (`EXACT`)
+  - 넘으면 429 `요청이 너무 많아요. 잠시 뒤 다시 해 주세요` + `Retry-After: 60`. 없는 코드는 10번까지 404, 그 뒤 429
+  - 같은 와이파이(같은 IP)를 쓰는 친구들은 한도를 같이 씀 — 한도를 낮출 땐 주의
+- **웹소켓**: 허용된 출처(ALLOWED_ORIGINS)만, **Origin 이 없으면 거부**(봇·스크립트). 지도 방 한 곳당 전체 60·같은 IP 8·구경 30 연결까지(`ROOM_LIMITS`, 넘으면 연결 전에 429). ping 이 아닌 메시지는 연결을 끊음(1008)
+- **AI·검색 수집 금지**: API `/robots.txt`(Disallow: /), 모든 API 응답 `X-Robots-Tag: noindex, nofollow, noarchive, noai, noimageai`, 페이지 `<meta name="robots" …noai>`. GitHub Pages 의 /marker/robots.txt 는 크롤러가 안 읽으므로(도메인 루트만 읽음) 페이지는 meta 로
+- 남은 위험: Origin·User-Agent 는 봇이 흉내낼 수 있음. 더 막으려면 만들기·들어가기에 Cloudflare Turnstile(사람 확인) — 대시보드에서 키 발급 필요
 
 ### 프론트
 - 빌드 도구·프레임워크 없음. 순수 HTML/CSS/JS 유지 (room.js 가 app.js 보다 먼저 로드, 서로의 전역을 호출 시점에 씀)
