@@ -389,7 +389,7 @@ const Room = (() => {
     openDialog(`
       <div class="landing">
         <span class="landing-pin" aria-hidden="true"></span>
-        <h2>같이 꽂을까요?</h2>
+        <h2>같이 새겨요</h2>
         <p class="hint">친구에게 받은 지도 번호를 넣으면 같은 지도에 같이 마킹할 수 있어요.</p>
         <input class="code-box" name="code" maxlength="4" placeholder="A1B2" autocomplete="off" autocapitalize="characters"
           spellcheck="false" aria-label="지도 번호 4자리" aria-describedby="codeMsg">
