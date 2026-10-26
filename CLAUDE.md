@@ -85,6 +85,7 @@ npx http-server frontend -p 8080 -s -c-1
 - `backend/**` 변경 → `backend.yml` → typecheck·test 통과 시 Cloudflare Workers (Secrets: `CLOUDFLARE_API_TOKEN`)
 - 루트 파일만 바꾸면 배포 안 됨
 - `KAKAO_REST_KEY` 는 Cloudflare 시크릿. 배포해도 유지됨
+- `backend.yml` 은 배포 전에 `wrangler d1 migrations apply marker --remote` 실행 → `CLOUDFLARE_API_TOKEN` 에 **D1 편집 권한** 필요 (Edit Cloudflare Workers 템플릿엔 없음)
 
 ### 배포 확인 방법
 - GitHub API 를 비로그인으로 조회하면 **시간당 60회 한도**. 10초마다 폴링하다 한도를 다 쓴 적 있음 → 폴링은 30초 이상 간격, 또는 결과물을 직접 확인:
