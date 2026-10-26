@@ -10,3 +10,11 @@ ALLOWED_ORIGINS = "https://giyoooon.github.io,http://localhost:8080,http://127.0
 # KAKAO_REST_KEY 는 비밀값이라 여기 두지 않음
 #   로컬: backend/.dev.vars 에 KAKAO_REST_KEY=...
 #   배포: npx wrangler secret put KAKAO_REST_KEY
+
+# 공유 지도 DB (Cloudflare D1). 스키마는 migrations/ — 배포 때 GitHub Actions 가 원격에 적용
+#   로컬: npx wrangler d1 migrations apply marker --local
+[[d1_databases]]
+binding = "DB"
+database_name = "marker"
+database_id = "8c34536b-e034-4de6-86c8-8894c2e3560a"
+migrations_dir = "migrations"

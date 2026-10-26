@@ -39,7 +39,7 @@ export function legFromRoad(mode: Mode, roadKm: number, carMin: number): RouteLe
   return { min: carMin, km: roadKm, walk: false };
 }
 
-export async function route(req: RouteRequest, env: Env): Promise<RouteResponse> {
+export async function route(req: RouteRequest, env: Pick<Env, 'KAKAO_REST_KEY'>): Promise<RouteResponse> {
   const { mode } = req;
   const warnings: string[] = [];
   const key = env.KAKAO_REST_KEY;

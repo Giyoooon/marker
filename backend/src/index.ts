@@ -2,8 +2,10 @@
 //   GET  /api/health              서버 상태, 카카오 키 설정 여부
 //   GET  /api/search?q=&lat=&lng= 카카오 장소 검색
 //   POST /api/route               마커 순서대로 경로 계산, optimize 면 최단 순서로 정렬 (형식: src/route.ts)
+//   /api/maps...                  공유 지도 (src/shared.ts)
 import { KakaoError, searchKeyword } from './kakao';
 import { route } from './route';
+import * as shared from './shared';
 import type { Env } from './types';
 import { BadRequest, validateRoute } from './validate';
 
@@ -16,7 +18,7 @@ function corsHeaders(req: Request, env: Env): Record<string, string> {
   if (!origin || !allowed.includes(origin)) return {};
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
@@ -55,6 +57,35 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     return json(await route(validateRoute(await readJson(req)), env));
   }
 
+  if (path === '/api/maps' || path.startsWith('/api/maps/')) return handleMaps(req, env, path);
+
+  return json({ error: 'not found' }, 404);
+}
+
+/** 공유 지도 API. 경로 형식과 동작은 src/shared.ts 맨 위 주석 참고 */
+async function handleMaps(req: Request, env: Env, path: string): Promise<Response> {
+  const db = env.DB;
+  const m = req.method;
+  if (path === '/api/maps' && m === 'POST') return json(await shared.createMap(db, await readJson(req)), 201);
+
+  const parts = path.split('/').slice(3);   // [code, sub?, id?]
+  const code = shared.normalizeCode(parts[0] ?? '');
+  const [, sub, idStr] = parts;
+  const id = Number(idStr);
+  if (!sub) {
+    if (m === 'GET') return json(await shared.getMap(db, code), 200, { 'Cache-Control': 'no-store' });
+    if (m === 'PATCH') return json(await shared.updateMap(db, code, await readJson(req)));
+  } else if (sub === 'members' && !idStr && m === 'POST') {
+    const r = await shared.joinMap(db, code, await readJson(req));
+    return json({ member: r.member }, r.created ? 201 : 200);
+  } else if (sub === 'markers' && !idStr && m === 'POST') {
+    return json(await shared.addMarker(db, code, await readJson(req)), 201);
+  } else if (sub === 'markers' && Number.isInteger(id)) {
+    if (m === 'PATCH') return json(await shared.updateMarker(db, code, id, await readJson(req)));
+    if (m === 'DELETE') return json(await shared.deleteMarker(db, code, id));
+  } else if (sub === 'order' && m === 'PUT') {
+    return json(await shared.reorder(db, code, await readJson(req)));
+  }
   return json({ error: 'not found' }, 404);
 }
 
@@ -67,6 +98,8 @@ export default {
       res = await handle(req, env, ctx);
     } catch (e) {
       if (e instanceof BadRequest) res = json({ error: e.message }, 400);
+      else if (e instanceof shared.NotFound) res = json({ error: e.message }, 404);
+      else if (e instanceof shared.Conflict) res = json({ error: e.message }, 409);
       else if (e instanceof KakaoError) res = json({ error: `카카오 API 오류: ${e.message}` }, 502);
       else { console.error(e); res = json({ error: '서버 오류' }, 500); }
     }
