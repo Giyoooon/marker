@@ -3,11 +3,13 @@
 //   GET  /api/regions             지역별 추천 명소
 //   GET  /api/search?q=&lat=&lng= 카카오 장소 검색
 //   POST /api/plan                일정 최적화 (요청 형식은 src/types.ts 의 PlanRequest)
+//   POST /api/route               정한 순서대로 경로 계산 (요청 형식은 src/route.ts 의 RouteRequest)
 import { KakaoError, searchKeyword } from './kakao';
 import { plan } from './plan';
 import { REGIONS } from './regions';
+import { route } from './route';
 import type { Env } from './types';
-import { BadRequest, validatePlan } from './validate';
+import { BadRequest, validatePlan, validateRoute } from './validate';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers } });
@@ -25,7 +27,11 @@ function corsHeaders(req: Request, env: Env): Record<string, string> {
   };
 }
 
-async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function readJson(req: Request): Promise<unknown> {
+  try { return await req.json(); } catch { throw new BadRequest('JSON 본문이 필요해요'); }
+}
+
+async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, '');
 
@@ -52,9 +58,11 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
   }
 
   if (path === '/api/plan' && req.method === 'POST') {
-    let body: unknown;
-    try { body = await req.json(); } catch { throw new BadRequest('JSON 본문이 필요해요'); }
-    return json(await plan(validatePlan(body), env));
+    return json(await plan(validatePlan(await readJson(req)), env));
+  }
+
+  if (path === '/api/route' && req.method === 'POST') {
+    return json(await route(validateRoute(await readJson(req)), env));
   }
 
   return json({ error: 'not found' }, 404);
@@ -66,7 +74,7 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     let res: Response;
     try {
-      res = await route(req, env, ctx);
+      res = await handle(req, env, ctx);
     } catch (e) {
       if (e instanceof BadRequest) res = json({ error: e.message }, 400);
       else if (e instanceof KakaoError) res = json({ error: `카카오 API 오류: ${e.message}` }, 502);

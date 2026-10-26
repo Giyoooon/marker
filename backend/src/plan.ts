@@ -1,6 +1,6 @@
 // /api/plan: 요청 → 이동시간 행렬 → 최적화 → (자동차면) 실제 도로 경로로 시간 보정
 import { estimateLeg, haversineKm, hhmm, PARKING_MIN, preferWalk, toMin } from './geo';
-import { KakaoError, multiDestination, pool, waypointsRoute } from './kakao';
+import { errMsg, multiDestination, pool, waypointsRoute } from './kakao';
 import { optimize, simulate, type DayDef, type Matrix, type Sim, type Stop } from './planner';
 import type { Env, Leg, Mode, Place, PlanDay, PlanRequest, PlanResponse } from './types';
 
@@ -90,7 +90,7 @@ export async function plan(req: PlanRequest, env: Env): Promise<PlanResponse> {
         const r = await waypointsRoute(key, seq.map(n => nodes[n]));
         r.sections.forEach((sec, k) => {
           const a = seq[k], b = seq[k + 1];
-          if (!legs[a][b].walk) override.set(`${a},${b}`, { min: sec / 60 + PARKING_MIN, walk: false });
+          if (!legs[a][b].walk) override.set(`${a},${b}`, { min: sec.duration / 60 + PARKING_MIN, walk: false });
         });
         paths[i] = r.path;
       } catch (e) {
@@ -131,4 +131,3 @@ export async function plan(req: PlanRequest, env: Env): Promise<PlanResponse> {
 }
 
 const roundLeg = (l: Leg): Leg => ({ min: Math.round(l.min), walk: l.walk });
-const errMsg = (e: unknown) => (e instanceof KakaoError ? e.message : String(e)).slice(0, 120);

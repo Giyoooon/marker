@@ -29,6 +29,7 @@ let state;
 let lastPlan = null;
 let searchResults = [];
 let clickPlace = null;
+let activeTab = 'setup';
 
 function curatedSpots(region) {
   return (REGIONS[region]?.spots || []).map(s => ({ ...s, selected: false, must: false, custom: false }));
@@ -36,7 +37,7 @@ function curatedSpots(region) {
 function defaultState() {
   const region = REGIONS.daegu ? 'daegu' : Object.keys(REGIONS)[0];
   return { region, days: 2, mode: 'car', dayTimes: [{ start: '10:00', end: '21:00' }, { start: '09:30', end: '19:00' }],
-    lodging: null, firstStart: null, lastEnd: null, fixed: [], spots: curatedSpots(region) };
+    lodging: null, firstStart: null, lastEnd: null, fixed: [], spots: curatedSpots(region), route: [] };
 }
 // 저장·공유 시에는 선택한 곳/직접 추가한 곳만 남겨 링크를 짧게 유지
 function serialize() {
@@ -71,6 +72,7 @@ function placeActions(src) {
   return `<div class="chips">
     <button class="chip" data-act="pick" data-role="spot" data-src="${src}">+ 가볼 곳</button>
     <button class="chip" data-act="pick" data-role="fixed" data-src="${src}">+ 고정 일정</button>
+    <button class="chip" data-act="pick" data-role="route" data-src="${src}">+ 내 경로</button>
     <button class="chip" data-act="pick" data-role="lodging" data-src="${src}">🏨 숙소</button>
     <button class="chip" data-act="pick" data-role="firstStart" data-src="${src}">첫날 출발지</button>
     <button class="chip" data-act="pick" data-role="lastEnd" data-src="${src}">마지막날 도착지</button>
@@ -87,12 +89,15 @@ function renderMarkers() {
   KMap.clear('base');
   const planned = new Set();
   if (lastPlan) lastPlan.days.forEach(d => d.items.forEach(it => planned.add((it.fixed ? 'f:' : 's:') + it.id)));
+  // 내 경로 탭에서는 경로에 넣은 곳을 번호 마커로만 보여 줌
+  const onRoute = new Set(state.route.map(posKey));
   for (const s of state.spots) {
-    if (planned.has('s:' + s.id)) continue;
+    if (planned.has('s:' + s.id) || (activeTab === 'route' && onRoute.has(posKey(s)))) continue;
     KMap.pin('base', { lat: s.lat, lng: s.lng, color: s.selected ? '#2f9e44' : '#adb5bd', label: s.must ? '★' : '',
       size: s.selected ? 18 : 14, title: s.name,
       onClick: () => KMap.openPopup(s.lat, s.lng, `<b>${esc(s.name)}</b>
-        <button class="chip" data-act="toggle" data-id="${s.id}">${s.selected ? '선택 해제' : '✓ 가볼 곳으로 선택'}</button>`) });
+        <button class="chip" data-act="toggle" data-id="${s.id}">${s.selected ? '선택 해제' : '✓ 가볼 곳으로 선택'}</button>
+        <button class="chip" data-act="addRoute" data-id="${s.id}">+ 내 경로</button>`) });
   }
   for (const f of state.fixed) {
     if (planned.has('f:' + f.id)) continue;
@@ -170,11 +175,145 @@ function renderSpots() {
     ${curated.map(spotRow).join('')}`;
   $('#nSpots').textContent = n;
 }
-function render() { renderSetup(); renderFixed(); renderSpots(); renderMarkers(); save(); }
+function render() { renderSetup(); renderFixed(); renderSpots(); renderRoute(); renderMarkers(); drawManual(); save(); }
 function showTab(name) {
+  activeTab = name;
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + name));
+  // 내 경로 탭에서는 직접 정한 경로만, 다른 탭에서는 자동으로 짠 일정 경로만 지도에 표시
+  if (KMap.ready()) {
+    KMap.setVisible('manual', name === 'route');
+    KMap.setVisible('route', name !== 'route');
+    renderMarkers();
+  }
 }
+
+// ───────────── 내 경로 (직접 순서 정하기 → /api/route) ─────────────
+const MANUAL_COLOR = '#7048e8';
+let routeInfo = null;   // 마지막 /api/route 응답 + 어떤 순서·이동수단에 대한 응답인지(key)
+let routeSeq = 0, routeTimer = null;
+
+const posKey = p => p.lat.toFixed(5) + ',' + p.lng.toFixed(5);
+const routeKey = () => state.mode + '|' + state.route.map(posKey).join(';');
+const routeInfoFor = () => (routeInfo && routeInfo.key === routeKey() && !routeInfo.error ? routeInfo : null);
+
+function routeChanged() {
+  renderRoute(); renderMarkers(); drawManual(); save();
+  scheduleRoute();
+}
+function scheduleRoute() {
+  clearTimeout(routeTimer);
+  if (state.route.length >= 2) routeTimer = setTimeout(fetchRoute, 300);
+}
+async function fetchRoute() {
+  const seq = ++routeSeq, key = routeKey();
+  let info;
+  try {
+    info = await api('/api/route', { mode: state.mode, points: state.route.map(({ name, lat, lng }) => ({ name, lat, lng })) });
+  } catch (e) {
+    info = { error: e.message };
+  }
+  if (seq !== routeSeq) return;   // 그 사이 순서가 또 바뀌었으면 버림
+  routeInfo = { ...info, key };
+  renderRoute(); drawManual();
+}
+function swapRoute(i, j) {
+  if (j < 0 || j >= state.route.length) return;
+  [state.route[i], state.route[j]] = [state.route[j], state.route[i]];
+  routeChanged();
+}
+/** from 번째 마커를 to 자리(원래 배열 기준 삽입 위치)로 옮김 */
+function moveRoute(from, to) {
+  if (to > from) to--;
+  if (to === from) return;
+  const [p] = state.route.splice(from, 1);
+  state.route.splice(to, 0, p);
+  routeChanged();
+}
+
+function routeLegHtml(leg, a, b) {
+  if (leg.km === 0) return '같은 자리';
+  const [icon, , by] = leg.walk ? ['🚶', '도보', 'walk'] : MODES[state.mode];
+  return `${icon} ${human(leg.min)} · ${leg.km}km<a href="${kakaoLink(a, b, by)}" target="_blank" rel="noopener">길찾기 ↗</a>`;
+}
+function renderRoute() {
+  const R = state.route, info = routeInfoFor();
+  const err = routeInfo && routeInfo.key === routeKey() && routeInfo.error;
+  $('#nRoute').textContent = R.length;
+  let html = `<p class="hint">검색하거나 지도를 클릭해서 <b>+ 내 경로</b>로 마커를 넣고, <b>⠿를 끌어 놓거나 ▲▼</b>로 순서를 바꾸면 그 순서대로 지도에 경로가 그려져요.</p>`;
+  if (!R.length) { $('#tab-route').innerHTML = html + '<p class="hint">아직 등록한 마커가 없어요.</p>'; return; }
+  if (R.length >= 2) {
+    html += info
+      ? `<div class="summary">${R.length}곳 · 이동 ${human(info.totalMin)} · ${info.totalKm}km · ${info.source === 'kakao' ? '카카오모빌리티 실제 도로 기준' : '직선거리 기반 추정'}</div>`
+      : err ? `<div class="note">경로를 불러오지 못했어요: ${esc(err)}</div>` : '<div class="summary">경로 계산 중…</div>';
+    info?.warnings.forEach(w => html += `<div class="note">${esc(w)}</div>`);
+  }
+  html += '<ol class="rt-list">';
+  R.forEach((p, i) => {
+    if (i > 0) html += `<li class="rt-leg" data-at="${i}">${info ? routeLegHtml(info.legs[i - 1], R[i - 1], p) : '…'}</li>`;
+    html += `<li class="rt" draggable="true" data-i="${i}">
+      <span class="grip" title="끌어서 순서 바꾸기">⠿</span>
+      <span class="num" style="background:${MANUAL_COLOR}">${i + 1}</span>
+      <span class="rt-name" data-act="focus" data-lat="${p.lat}" data-lng="${p.lng}" title="${esc(p.name)}">${esc(p.name)}</span>
+      <button class="x" data-act="rtMove" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} title="위로">▲</button>
+      <button class="x" data-act="rtMove" data-i="${i}" data-d="1" ${i === R.length - 1 ? 'disabled' : ''} title="아래로">▼</button>
+      <button class="x" data-act="rtDel" data-i="${i}" title="삭제">✕</button>
+    </li>`;
+  });
+  html += `</ol><div class="row" style="margin-top:12px;flex-wrap:wrap">
+    <button class="btn" data-act="rtReverse">⇅ 순서 뒤집기</button>
+    <button class="btn" data-act="rtFit">전체 보기</button>
+    <button class="btn" data-act="rtClear">모두 지우기</button></div>`;
+  $('#tab-route').innerHTML = html;
+}
+function drawManual() {
+  if (!KMap.ready()) return;
+  KMap.clear('manual');
+  const R = state.route, info = routeInfoFor();
+  if (R.length >= 2) KMap.line('manual', info?.path || R.map(p => [p.lat, p.lng]), MANUAL_COLOR, !info?.path);
+  R.forEach((p, i) => KMap.pin('manual', { lat: p.lat, lng: p.lng, color: MANUAL_COLOR, label: i + 1, size: 26, z: 60, title: `${i + 1}. ${p.name}` }));
+}
+
+// 끌어서 놓기: 마커 행 위에서는 위/아래 절반에 따라 앞/뒤로, 구간 행 위에서는 그 사이로 삽입
+let dragFrom = null;
+const tabRoute = $('#tab-route');
+function dropTarget(e) {
+  const row = e.target.closest('li.rt, li.rt-leg');
+  if (!row) return null;
+  if (row.classList.contains('rt-leg')) return { row, to: +row.dataset.at, cls: 'drop-on' };
+  const r = row.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+  return { row, to: +row.dataset.i + (after ? 1 : 0), cls: after ? 'drop-after' : 'drop-before' };
+}
+const clearDropMarks = () => tabRoute.querySelectorAll('.drop-before, .drop-after, .drop-on')
+  .forEach(el => el.classList.remove('drop-before', 'drop-after', 'drop-on'));
+tabRoute.addEventListener('dragstart', e => {
+  const li = e.target.closest('li.rt');
+  if (!li) return;
+  dragFrom = +li.dataset.i;
+  li.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(dragFrom));
+});
+tabRoute.addEventListener('dragover', e => {
+  if (dragFrom == null) return;
+  const t = dropTarget(e);
+  if (!t) return;
+  e.preventDefault();
+  clearDropMarks();
+  t.row.classList.add(t.cls);
+});
+tabRoute.addEventListener('drop', e => {
+  if (dragFrom == null) return;
+  const t = dropTarget(e);
+  if (!t) return;
+  e.preventDefault();
+  moveRoute(dragFrom, t.to);
+});
+tabRoute.addEventListener('dragend', () => {
+  dragFrom = null;
+  clearDropMarks();
+  tabRoute.querySelector('.dragging')?.classList.remove('dragging');
+});
 function viewRegion() {
   const r = REGIONS[state.region];
   if (r && KMap.ready()) KMap.setView(r.center[0], r.center[1], r.level);
@@ -208,6 +347,10 @@ function addPlace(role, p) {
   } else if (role === 'fixed') {
     state.fixed.push({ id: 'f' + uid(), ...place, day: 1, time: '12:00', dur: 60 });
     showTab('fixed');
+  } else if (role === 'route') {
+    state.route.push({ id: 'r' + uid(), ...place });
+    showTab('route');
+    scheduleRoute();
   } else {
     state[role] = place;
     showTab('setup');
@@ -235,6 +378,18 @@ function onAction(e) {
     const s = findSpot(id); s.selected = !s.selected; KMap.ready() && KMap.closePopup(); render();
   } else if (act === 'must') {
     const s = findSpot(id); s.must = !s.must; if (s.must) s.selected = true; render();
+  } else if (act === 'addRoute') {
+    addPlace('route', findSpot(id));
+  } else if (act === 'rtMove') {
+    swapRoute(+el.dataset.i, +el.dataset.i + +el.dataset.d);
+  } else if (act === 'rtDel') {
+    state.route.splice(+el.dataset.i, 1); routeChanged();
+  } else if (act === 'rtReverse') {
+    state.route.reverse(); routeChanged();
+  } else if (act === 'rtClear') {
+    if (confirm('내 경로의 마커를 모두 지울까요?')) { state.route = []; routeChanged(); }
+  } else if (act === 'rtFit') {
+    KMap.ready() && KMap.fit(routeInfoFor()?.path || state.route.map(p => [p.lat, p.lng]));
   } else if (act === 'delSpot') {
     state.spots = state.spots.filter(s => s.id !== id); render();
   } else if (act === 'delFixed') {
@@ -273,7 +428,7 @@ document.addEventListener('change', e => {
       viewRegion();
       break;
     case 'days': state.days = +v; syncDayTimes(state); break;
-    case 'mode': state.mode = v; break;
+    case 'mode': state.mode = v; if (state.route.length) routeChanged(); break;
     case 'dayStart': state.dayTimes[i].start = v; break;
     case 'dayEnd': state.dayTimes[i].end = v; break;
     case 'fName': findFixed(el.dataset.id).name = v; break;
@@ -447,4 +602,5 @@ function showMapError(html) { const el = $('#mapError'); el.innerHTML = `<div>${
       지도 없이도 일정 짜기는 쓸 수 있어요.`);
   }
   render();
+  scheduleRoute();
 })();

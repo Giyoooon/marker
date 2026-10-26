@@ -1,8 +1,10 @@
+import type { RouteRequest } from './route';
 import type { DayInput, FixedInput, Mode, Place, PlanRequest, SpotInput } from './types';
 
 export class BadRequest extends Error {}
 
-const LIMITS = { days: 7, fixed: 30, spots: 40 };
+// routePoints: 카카오모빌리티 다중 경유지 길찾기 한도(경유지 30 + 출발·도착)
+const LIMITS = { days: 7, fixed: 30, spots: 40, routePoints: 32 };
 const TIME = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
 function fail(msg: string): never { throw new BadRequest(msg); }
@@ -37,10 +39,21 @@ const list = (v: unknown, field: string, max: number) => {
   return v as unknown[];
 };
 
+function mode(v: unknown): Mode {
+  const m = (v ?? 'car') as Mode;
+  if (!['car', 'transit', 'walk'].includes(m)) fail('mode: car | transit | walk');
+  return m;
+}
+
+export function validateRoute(body: unknown): RouteRequest {
+  if (!isObj(body)) fail('JSON 객체가 필요해요');
+  const points = list(body.points, 'points', LIMITS.routePoints).map((p, i) => place(p, `points[${i}]`));
+  if (points.length < 2) fail('points: 최소 2곳이 필요해요');
+  return { mode: mode(body.mode), points };
+}
+
 export function validatePlan(body: unknown): PlanRequest {
   if (!isObj(body)) fail('JSON 객체가 필요해요');
-  const mode = (body.mode ?? 'car') as Mode;
-  if (!['car', 'transit', 'walk'].includes(mode)) fail('mode: car | transit | walk');
   const days: DayInput[] = list(body.days, 'days', LIMITS.days).map((d, i) => {
     if (!isObj(d)) fail(`days[${i}]: 객체가 필요해요`);
     return { start: time(d.start, `days[${i}].start`), end: time(d.end, `days[${i}].end`),
@@ -64,5 +77,5 @@ export function validatePlan(body: unknown): PlanRequest {
     return { ...place(s, `spots[${i}]`), id: id(s.id, `spots[${i}].id`),
       dur: num(s.dur ?? 60, `spots[${i}].dur`, 5, 720), must: s.must === true };
   });
-  return { mode, days, fixed, spots };
+  return { mode: mode(body.mode), days, fixed, spots };
 }

@@ -52,10 +52,12 @@ export async function multiDestination(key: string, origin: Place, dests: { key:
   return out;
 }
 
-/** 경유지 포함 자동차 경로. 구간별 소요시간(초)과 지도에 그릴 좌표를 돌려줌 */
-export async function waypointsRoute(key: string, pts: Place[]): Promise<{ sections: number[]; path: [number, number][] }> {
+export interface Section { duration: number; distance: number }
+
+/** 경유지 포함 자동차 경로. 구간별 소요시간(초)·거리(m)와 지도에 그릴 좌표를 돌려줌 */
+export async function waypointsRoute(key: string, pts: Place[]): Promise<{ sections: Section[]; path: [number, number][] }> {
   const xy = (p: Place) => ({ x: p.lng, y: p.lat });
-  const data = await call<{ routes: { result_code: number; result_msg: string; sections?: { duration: number; roads: { vertexes: number[] }[] }[] }[] }>(
+  const data = await call<{ routes: { result_code: number; result_msg: string; sections?: (Section & { roads: { vertexes: number[] }[] })[] }[] }>(
     `${NAVI}/waypoints/directions`, key, {
       origin: xy(pts[0]),
       destination: xy(pts[pts.length - 1]),
@@ -72,8 +74,10 @@ export async function waypointsRoute(key: string, pts: Place[]): Promise<{ secti
       if (!last || Math.abs(last[0] - p[0]) + Math.abs(last[1] - p[1]) > 0.0002) path.push(p);
     }
   }
-  return { sections: route.sections.map(s => s.duration), path };
+  return { sections: route.sections.map(s => ({ duration: s.duration, distance: s.distance })), path };
 }
+
+export const errMsg = (e: unknown) => (e instanceof KakaoError ? e.message : String(e)).slice(0, 120);
 
 /** 동시 요청 수를 제한해서 비동기 작업 실행 */
 export async function pool<T>(tasks: (() => Promise<T>)[], size = 6): Promise<T[]> {

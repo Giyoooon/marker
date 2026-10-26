@@ -1,7 +1,9 @@
 // 카카오맵 JS SDK 래퍼 — app.js 는 이 객체만 사용
 const KMap = (() => {
   let map = null, popup = null;
-  const layers = { base: [], route: [] };
+  const layers = { base: [], route: [], manual: [] };
+  const visible = { base: true, route: true, manual: false };
+  const show = (o, layer) => o.setMap(visible[layer] ? map : null);
   const LL = (lat, lng) => new kakao.maps.LatLng(lat, lng);
 
   function loadSdk(appKey) {
@@ -32,17 +34,18 @@ const KMap = (() => {
     el.title = title;
     if (onClick) el.addEventListener('click', e => { e.stopPropagation(); onClick(); });
     const ov = new kakao.maps.CustomOverlay({ position: LL(lat, lng), content: el, xAnchor: 0.5, yAnchor: 0.5, zIndex: z, clickable: true });
-    ov.setMap(map);
+    show(ov, layer);
     layers[layer].push(ov);
   }
 
   function line(layer, path, color, dashed) {
     const pl = new kakao.maps.Polyline({ path: path.map(([lat, lng]) => LL(lat, lng)), strokeWeight: 5, strokeColor: color,
       strokeOpacity: 0.85, strokeStyle: dashed ? 'shortdash' : 'solid' });
-    pl.setMap(map);
+    show(pl, layer);
     layers[layer].push(pl);
   }
 
+  function setVisible(layer, on) { visible[layer] = on; layers[layer].forEach(o => o.setMap(on ? map : null)); }
   function clear(layer) { layers[layer].forEach(o => o.setMap(null)); layers[layer].length = 0; }
 
   function openPopup(lat, lng, html) {
@@ -69,5 +72,5 @@ const KMap = (() => {
   }
   const ready = () => !!map;
 
-  return { init, pin, line, clear, openPopup, closePopup, setView, focus, fit, ready, onAction: () => {} };
+  return { init, pin, line, clear, setVisible, openPopup, closePopup, setView, focus, fit, ready, onAction: () => {} };
 })();

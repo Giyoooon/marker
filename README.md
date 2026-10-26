@@ -15,6 +15,7 @@ backend/   API (Cloudflare Workers, TypeScript) → 일정 최적화, 카카오 
 | GET | `/api/regions` | 지역별 추천 명소 |
 | GET | `/api/search?q=&lat=&lng=` | 카카오 키워드 장소 검색 |
 | POST | `/api/plan` | 일정 최적화 (요청/응답 형식: `backend/src/types.ts`) |
+| POST | `/api/route` | 정한 순서 그대로 경로 계산: 구간별 시간·거리, 도로 경로 좌표 (형식: `backend/src/route.ts`) |
 
 ```bash
 curl -X POST $API/api/plan -H 'Content-Type: application/json' -d '{
