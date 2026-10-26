@@ -1,4 +1,4 @@
-import type { RouteRequest } from './route';
+import type { LegRequest, RouteRequest } from './route';
 import type { Mode, Place } from './types';
 
 export class BadRequest extends Error {}
@@ -42,5 +42,10 @@ export function validateRoute(body: unknown): RouteRequest {
   const roundTrip = body.roundTrip === true;
   // 왕복이면 출발지로 돌아오는 지점이 하나 더 붙음
   if (roundTrip && points.length > MAX_POINTS - 1) fail(`points: 왕복은 최대 ${MAX_POINTS - 1}개까지 가능해요`);
-  return { mode: mode(body.mode), points, optimize: body.optimize === true, roundTrip };
+  return { mode: mode(body.mode), points, optimize: body.optimize === true, roundTrip, orderOnly: body.orderOnly === true };
+}
+
+export function validateLeg(body: unknown): LegRequest {
+  if (!isObj(body)) fail('JSON 객체가 필요해요');
+  return { mode: mode(body.mode), from: place(body.from, 'from'), to: place(body.to, 'to') };
 }

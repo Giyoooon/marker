@@ -2,13 +2,14 @@
 //   GET  /api/health              서버 상태, 카카오 키 설정 여부
 //   GET  /api/search?q=&lat=&lng= 카카오 장소 검색
 //   POST /api/route               마커 순서대로 경로 계산, optimize 면 최단 순서로 정렬 (형식: src/route.ts)
+//   POST /api/leg                 두 지점 사이 한 구간 (화면이 구간마다 동시에 요청). 도로 구간은 6시간 캐시
 //   /api/maps...                  공유 지도 (src/shared.ts)
-import { KakaoError, searchKeyword } from './kakao';
-import { route } from './route';
+import { directions, KakaoError, searchKeyword, type Section } from './kakao';
+import { route, routeLeg } from './route';
 import * as shared from './shared';
 export { MapRoom } from './room';
-import type { Env } from './types';
-import { BadRequest, validateRoute } from './validate';
+import type { Env, Place } from './types';
+import { BadRequest, validateLeg, validateRoute } from './validate';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers } });
@@ -56,6 +57,11 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
 
   if (path === '/api/route' && req.method === 'POST') {
     return json(await route(validateRoute(await readJson(req)), env));
+  }
+
+  if (path === '/api/leg' && req.method === 'POST') {
+    const key = env.KAKAO_REST_KEY;
+    return json(await routeLeg(validateLeg(await readJson(req)), key ? (a, b) => cachedRoad(key, a, b, ctx) : null));
   }
 
   if (path === '/api/maps' || path.startsWith('/api/maps/')) return handleMaps(req, env, ctx, path);
@@ -141,3 +147,19 @@ export default {
     return out;
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * 두 지점 사이 자동차 도로 구간. 같은 구간은 6시간 동안 Cache API 에 저장해서 카카오를 다시 부르지 않음
+ * (이동수단과 상관없이 같은 도로 구간을 쓰고, 이동시간은 route.ts legFromRoad 가 이동수단별로 계산)
+ */
+async function cachedRoad(key: string, a: Place, b: Place, ctx: ExecutionContext): Promise<Section> {
+  const p = (x: Place) => `${x.lat.toFixed(5)},${x.lng.toFixed(5)}`;
+  const cacheKey = new Request(`https://cache.marker/road?a=${p(a)}&b=${p(b)}`);
+  const hit = await caches.default.match(cacheKey);
+  if (hit) return hit.json() as Promise<Section>;
+  const section = await directions(key, a, b);
+  ctx.waitUntil(caches.default.put(cacheKey, new Response(JSON.stringify(section), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=21600' },
+  })));
+  return section;
+}

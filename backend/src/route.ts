@@ -6,7 +6,8 @@ import { estimateMatrix, kakaoMatrix } from './matrix';
 import { bestOrder } from './order';
 import type { Env, Mode, Place } from './types';
 
-export interface RouteRequest { mode: Mode; points: Place[]; optimize?: boolean; roundTrip?: boolean }
+/** orderOnly: 최단 순서(order)만 계산하고 구간·도로 경로는 건너뜀 (화면이 구간마다 /api/leg 로 따로 계산) */
+export interface RouteRequest { mode: Mode; points: Place[]; optimize?: boolean; roundTrip?: boolean; orderOnly?: boolean }
 export interface RouteLeg { min: number; km: number; walk: boolean }
 export interface RouteResponse {
   source: 'kakao' | 'estimate';
@@ -57,6 +58,8 @@ export async function route(req: RouteRequest, env: Pick<Env, 'KAKAO_REST_KEY'>)
     }
     order = bestOrder(req.points.length, (i, j) => M[i][j], req.roundTrip);
   }
+  if (req.orderOnly) return { source: key ? 'kakao' : 'estimate', order, legs: [], totalMin: 0, totalKm: 0, paths: [], warnings };
+
   // legs 는 points 순서대로. roundTrip 이면 마지막 legs 가 첫 마커로 돌아오는 구간
   const points = [...order, ...(req.roundTrip ? [order[0]] : [])].map(i => req.points[i]);
   const same = points.map((p, i) => i > 0 && haversineKm(points[i - 1], p) < SAME_SPOT_KM);
@@ -109,4 +112,33 @@ export async function route(req: RouteRequest, env: Pick<Env, 'KAKAO_REST_KEY'>)
     paths,
     warnings,
   };
+}
+
+// ───────── /api/leg: 두 지점 사이 한 구간 ─────────
+// 화면이 구간마다 따로(동시에) 요청해서, 오는 구간부터 바로 그림. 한 번 계산한 구간은 화면·서버가 각각 기억함
+export interface LegRequest { mode: Mode; from: Place; to: Place }
+export interface LegResponse {
+  leg: RouteLeg;
+  /** 도로 좌표 [lat, lng][]. null 이면 도로 경로를 못 찾아 직선거리로 추정한 구간 (같은 자리여도 null) */
+  path: [number, number][] | null;
+  source: 'kakao' | 'estimate';
+  warning?: string;
+}
+/** 두 지점 사이 자동차 도로 구간을 가져오는 함수 (index.ts 가 캐시를 씌워서 넘김). 없으면 직선거리 추정 */
+export type RoadFn = (a: Place, b: Place) => Promise<Section>;
+
+export async function routeLeg({ mode, from, to }: LegRequest, road: RoadFn | null): Promise<LegResponse> {
+  const round = (l: RouteLeg): RouteLeg => ({ min: Math.round(l.min), km: Math.round(l.km * 10) / 10, walk: l.walk });
+  if (haversineKm(from, to) < SAME_SPOT_KM) return { leg: { min: 0, km: 0, walk: true }, path: null, source: 'kakao' };
+  let warning = road ? undefined : '서버에 카카오 REST 키가 설정되지 않아 직선거리로 추정했어요.';
+  if (road) {
+    try {
+      const s = await road(from, to);
+      return { leg: round(legFromRoad(mode, s.distance / 1000, s.duration / 60)), path: s.path, source: 'kakao' };
+    } catch (e) {
+      warning = `도로 경로를 찾지 못해 직선거리로 추정했어요(${errMsg(e)}).`;
+    }
+  }
+  const est = estimateLeg(from, to, mode);
+  return { leg: round({ min: est.min, km: haversineKm(from, to) * 1.3, walk: est.walk }), path: null, source: 'estimate', warning };
 }

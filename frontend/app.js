@@ -124,16 +124,75 @@ function changed() {
   render();
   save();
   clearTimeout(routeTimer);
-  if (routePlan().points.length >= 2) routeTimer = setTimeout(fetchRoute, 300);
+  if (routePlan().points.length >= 2) routeTimer = setTimeout(fetchRoute, 120);
 }
+
+// ── 구간별 경로: 구간마다 /api/leg 를 동시에 요청하고, 오는 구간부터 바로 그림 ──
+// 한 번 받은 구간은 이동수단·출발·도착 좌표로 기억해서, 마커를 더하거나 순서를 바꾸면 새로 생긴 구간만 요청
+const legCache = new Map();   // `${mode}|${출발}>${도착}` → { leg, path, source }
+const LEG_CONCURRENCY = 6;
+const legKey = (mode, a, b) => `${mode}|${posKey(a)}>${posKey(b)}`;
+const routeStops = P => (P.roundTrip ? [...P.points, P.stay] : P.points);
+function distKm(a, b) {
+  const r = x => x * Math.PI / 180, dLat = r(b.lat - a.lat), dLng = r(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+/** 서버에 닿지 못했을 때만 쓰는 직선거리 추정 (서버 route.ts estimateLeg 와 같은 기준) */
+function estimateLeg(mode, a, b) {
+  const km = distKm(a, b), walk = km * 1.3 / 4.5 * 60;
+  const ride = mode === 'walk' ? Infinity : mode === 'car' ? km * 1.3 / (km > 10 ? 55 : 32) * 60 + 5 : km * 1.35 / (km > 10 ? 32 : 18) * 60 + 12;
+  const isWalk = mode === 'walk' || walk <= ride || km < 0.7;
+  return { min: Math.round(isWalk ? walk : ride), km: Math.round(km * 13) / 10, walk: isWalk };
+}
+/** 구간 결과들 → 화면이 쓰는 경로 정보 (아직 안 온 구간은 legs[k] = null) */
+function buildRoute(key, pairs, results) {
+  const done = results.filter(Boolean);
+  const failed = results.map((r, k) => (r && r.source === 'estimate' && r.leg.km > 0 ? k : -1)).filter(k => k >= 0);
+  const warnings = [];
+  if (failed.length) {
+    const noKey = results.some(r => r?.warning?.includes('REST 키'));
+    warnings.push(noKey ? '서버에 카카오 REST 키가 설정되지 않아 직선거리로 추정했어요.'
+      : `도로 경로를 찾지 못해 직선거리로 표시한 구간: ${failed.map(k => `${pairs[k][0].name} → ${pairs[k][1].name}`).join(', ')}`);
+  }
+  return {
+    key,
+    legs: results.map(r => r?.leg ?? null),
+    paths: results.map(r => r?.path ?? null),
+    done: done.length, total: results.length,
+    totalMin: done.reduce((s, r) => s + r.leg.min, 0),
+    totalKm: Math.round(done.reduce((s, r) => s + r.leg.km, 0) * 10) / 10,
+    source: failed.length === results.length && results.length ? 'estimate' : 'kakao',
+    warnings,
+  };
+}
+let renderQueued = false;
+const renderSoon = () => { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); } };
+
+/** 지금 경로의 모든 구간을 계산. 끝나면 resolve (그 사이 경로가 바뀌면 남은 결과는 기억만 하고 그리지 않음) */
 async function fetchRoute() {
-  const seq = ++routeSeq, P = routePlan(), key = routeKey(P);
-  let info;
-  try { info = await api('/api/route', routeBody(P)); }
-  catch (e) { info = { error: e.message }; }
-  if (seq !== routeSeq) return;   // 그 사이 경로가 또 바뀌었으면 버림
-  routeInfo = { ...info, key };
-  render();
+  const seq = ++routeSeq, P = routePlan(), key = routeKey(P), mode = state.mode;
+  const pts = routeStops(P);
+  const pairs = pts.slice(1).map((b, k) => [pts[k], b]);
+  const results = pairs.map(([a, b]) => (distKm(a, b) < 0.02 ? { leg: { min: 0, km: 0, walk: true }, path: null, source: 'kakao' }
+    : legCache.get(legKey(mode, a, b)) || null));
+  const publish = () => { if (seq === routeSeq) { routeInfo = buildRoute(key, pairs, results); renderSoon(); } };
+  publish();
+  const todo = results.map((r, k) => (r ? -1 : k)).filter(k => k >= 0);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(LEG_CONCURRENCY, todo.length) }, async () => {
+    while (next < todo.length) {
+      const k = todo[next++], [a, b] = pairs[k];
+      try {
+        const r = await api('/api/leg', { mode, from: { name: a.name, lat: a.lat, lng: a.lng }, to: { name: b.name, lat: b.lat, lng: b.lng } });
+        if (r.source === 'kakao') legCache.set(legKey(mode, a, b), r);   // 추정값은 기억하지 않음 (다음에 다시 시도)
+        results[k] = r;
+      } catch (e) {
+        results[k] = { leg: estimateLeg(mode, a, b), path: null, source: 'estimate', warning: e.message };
+      }
+      publish();
+    }
+  }));
 }
 
 // 순서를 바꿀 곳이 두 곳 이상일 때만 의미 있음 (출발지·숙소는 고정)
@@ -146,7 +205,8 @@ async function optimize() {
   clearTimeout(routeTimer);
   const seq = ++routeSeq;
   try {
-    const info = await api('/api/route', routeBody(P, { optimize: true }));
+    // 서버는 순서만 정하고(orderOnly), 구간은 화면이 구간마다 계산 (이미 아는 구간은 바로)
+    const info = await api('/api/route', routeBody(P, { optimize: true, orderOnly: true }));
     if (seq !== routeSeq) return;
     // 경로에 든 마커들이 차지하던 목록 자리에 새 순서대로 다시 채움 (빠진 마커와 숙소는 제자리)
     const ordered = info.order.map(i => P.points[i]);
@@ -154,11 +214,14 @@ async function optimize() {
     const slots = (P.roundTrip ? P.stops : P.points).map(m => state.markers.indexOf(m)).sort((a, b) => a - b);
     const before = state.markers.map(m => m.id).join();
     slots.forEach((pos, k) => { state.markers[pos] = moving[k]; });
-    routeInfo = { ...info, key: routeKey(routePlan()) };
     hoverLeg = selLeg = null;
-    render(); save(); fitAll();
+    render(); save();
     if (Room.active()) Room.pushOrder();
-    toast(before === state.markers.map(m => m.id).join() ? '이미 가장 짧은 순서예요' : `가장 짧은 순서로 바꿨어요 · ${human(info.totalMin)}`);
+    await fetchRoute();
+    fitAll();
+    const total = currentRoute()?.totalMin;
+    toast(before === state.markers.map(m => m.id).join() ? '이미 가장 짧은 순서예요'
+      : `가장 짧은 순서로 바꿨어요${total ? ` · ${human(total)}` : ''}`);
   } catch (e) {
     toast('정렬하지 못했어요: ' + e.message);
   } finally {
@@ -196,6 +259,7 @@ function kakaoLink(a, b, by) {
 const kakaoTo = p => `https://map.kakao.com/link/to/${encodeURIComponent(p.name.replace(/[,/]/g, ' '))},${p.lat},${p.lng}`;
 
 function legInner(leg, a, b, prefix = '') {
+  if (!leg) return `<span class="what pending">${prefix}계산 중…</span>`;   // 이 구간은 아직 안 옴
   if (leg.km === 0) return `<span class="what">${prefix}같은 자리</span>`;
   const [icon, by] = leg.walk ? ['🚶', 'walk'] : MODES[state.mode];
   const [h, m] = leg.min >= 60 ? [Math.floor(leg.min / 60), leg.min % 60] : [0, leg.min];
@@ -312,7 +376,10 @@ function renderFoot() {
   const P = routePlan(), info = currentRoute(P);
   const stopsCount = P.stops.length + (P.stay && !P.roundTrip ? 1 : 0);
   let html = '';
-  if (info) {
+  if (info && info.done < info.total) {
+    // 구간이 오는 대로 진행 상황
+    html = `<span class="muted">구간 계산 중 <b>${info.done}</b>/${info.total}</span>`;
+  } else if (info) {
     const straight = info.legs.filter((l, k) => l.km > 0 && !info.paths?.[k]).length;
     const basis = info.source !== 'kakao' ? ', 직선거리 추정'
       : straight ? `, ${straight}구간은 직선거리 추정`
@@ -347,7 +414,7 @@ function renderRouteLines() {
   if (P.points.length < 2 || !info) return;
   const active = activeLeg();
   info.legs.forEach((leg, k) => {
-    if (leg.km === 0) return;   // 같은 자리
+    if (!leg || leg.km === 0) return;   // 아직 안 온 구간, 같은 자리
     const path = legPath(P, info, k), road = !!info.paths?.[k];
     const on = active == null || active === k;
     const events = {

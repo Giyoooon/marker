@@ -327,3 +327,4 @@ dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor;
   .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)); transform: translate(-50%, -8px); max-width: calc(100vw - 32px); text-align: center; }
   .toast.on { transform: translate(-50%, 0); }
 }
+.leg .what.pending { color: var(--muted); font-style: normal; }
