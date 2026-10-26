@@ -263,7 +263,7 @@ function renderList() {
   rows.forEach(({ m, i }) => {
     const c = cat(m), pinned = P.stay === m;
     const badge = pinned ? '🏨' : num.get(m.id);
-    html += `<li class="row ${pinned ? 'pinned' : ''}" ${pinned ? '' : 'draggable="true"'} data-i="${i}" style="--c:${c.color}">
+    html += `<li class="row ${pinned ? 'pinned' : ''} ${Room.isFlashing(m.id) ? 'flash' : ''}" ${pinned ? '' : 'draggable="true"'} data-i="${i}" style="--c:${c.color}">
       <input type="checkbox" class="inc" data-i="${i}" checked aria-label="${esc(m.name)} 경로에서 빼기">
       <span class="grip" title="${pinned ? '숙소는 출발지로 고정돼요' : '끌어서 순서 바꾸기'}" aria-hidden="true">${pinned ? '' : '⠿'}</span>
       <span class="num" title="${pinned ? '출발·복귀' : '방문 순서'}">${badge}</span>
@@ -295,7 +295,7 @@ function renderList() {
     html += `<section class="off-sec"><h2 class="sec">경로에서 뺀 곳 <span class="n">${offRows.length}</span></h2><ol class="list">`;
     offRows.forEach(({ m, i }) => {
       const c = cat(m);
-      html += `<li class="row off" data-i="${i}" style="--c:${c.color}">
+      html += `<li class="row off ${Room.isFlashing(m.id) ? 'flash' : ''}" data-i="${i}" style="--c:${c.color}">
         <input type="checkbox" class="inc" data-i="${i}" aria-label="${esc(m.name)} 경로 맨 끝에 넣기" title="체크하면 경로 맨 끝에 붙어요">
         <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
         ${Room.byBadge(m)}
@@ -516,7 +516,7 @@ function onAction(e) {
     toast(`${m.name} 삭제했어요`);
   }
   else if (act === 'optimize') optimize();
-  else if (act === 'share' && Room.active()) Room.copyLink();
+  else if (act === 'share' && Room.active()) Room.openShare();
   else if (act === 'share') {
     const url = location.origin + location.pathname + '#t=' + b64enc(serialize());
     navigator.clipboard.writeText(url).then(() => toast('공유 링크를 복사했어요'), () => prompt('아래 링크를 복사하세요', url));

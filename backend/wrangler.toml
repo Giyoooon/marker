@@ -18,3 +18,12 @@ binding = "DB"
 database_name = "marker"
 database_id = "8c34536b-e034-4de6-86c8-8894c2e3560a"
 migrations_dir = "migrations"
+
+# 지도 방 (Durable Object, src/room.ts): 지도 번호마다 하나. 웹소켓 접속자 목록과 변경 알림
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "MapRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MapRoom"]   # 무료 플랜은 SQLite 방식 Durable Object 만 가능

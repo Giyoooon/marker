@@ -47,9 +47,9 @@ describe('지도 만들기', () => {
 
 describe('수정일', () => {
   it('행을 바꾸면 updated_at 이 갱신되고 created_at 은 그대로', async () => {
-    const { db, code, map } = await setup();
+    const { db, code, map, me } = await setup();
     await sleep(5);
-    const { map: after } = await shared.updateMap(db, code, { title: '대구 여행' });
+    const { map: after } = await shared.updateMap(db, code, { memberId: me.id, title: '대구 여행' });
     expect(after.title).toBe('대구 여행');
     expect(after.createdAt).toBe(map.createdAt);
     expect(after.updatedAt > map.updatedAt).toBe(true);
@@ -63,7 +63,7 @@ describe('수정일', () => {
     const afterAdd = (await shared.getMap(db, code)).map.updatedAt;
     expect(afterAdd > before).toBe(true);
     await sleep(5);
-    const { marker: m2 } = await shared.updateMarker(db, code, marker.id, { cat: 'food' });
+    const { marker: m2 } = await shared.updateMarker(db, code, marker.id, { memberId: me.id, cat: 'food' });
     expect(m2.updatedAt > marker.updatedAt).toBe(true);
     expect(m2.createdAt).toBe(marker.createdAt);
     expect((await shared.getMap(db, code)).map.updatedAt > afterAdd).toBe(true);
@@ -140,36 +140,44 @@ describe('경로 포함·순서', () => {
     (await shared.getMap(db, code)).markers.map(m => m.name + (m.on ? '' : '(off)')).join(' ');
 
   it('빼면 뺀 곳 맨 아래로, 다시 넣으면 경로 맨 끝으로', async () => {
-    const { db, code, ids: [a, b] } = await three();
-    await shared.updateMarker(db, code, a, { on: false });
-    await shared.updateMarker(db, code, b, { on: false });
+    const { db, code, me, ids: [a, b] } = await three();
+    await shared.updateMarker(db, code, a, { memberId: me.id, on: false });
+    await shared.updateMarker(db, code, b, { memberId: me.id, on: false });
     expect(await names(db, code)).toBe('C A(off) B(off)');
-    await shared.updateMarker(db, code, a, { on: true });
+    await shared.updateMarker(db, code, a, { memberId: me.id, on: true });
     expect(await names(db, code)).toBe('C A B(off)');
   });
 
   it('순서 바꾸기는 경로에 든 마커 전부를 받아야 한다', async () => {
-    const { db, code, ids: [a, b, c] } = await three();
-    await shared.reorder(db, code, { ids: [c, a, b] });
+    const { db, code, me, ids: [a, b, c] } = await three();
+    await shared.reorder(db, code, { memberId: me.id, ids: [c, a, b] });
     expect(await names(db, code)).toBe('C A B');
-    await expect(shared.reorder(db, code, { ids: [c, a] })).rejects.toThrow(shared.Conflict);
-    await shared.updateMarker(db, code, b, { on: false });
-    await expect(shared.reorder(db, code, { ids: [c, a, b] })).rejects.toThrow(/새로고침/);
+    await expect(shared.reorder(db, code, { memberId: me.id, ids: [c, a] })).rejects.toThrow(shared.Conflict);
+    await shared.updateMarker(db, code, b, { memberId: me.id, on: false });
+    await expect(shared.reorder(db, code, { memberId: me.id, ids: [c, a, b] })).rejects.toThrow(/새로고침/);
   });
 
   it('삭제', async () => {
-    const { db, code, ids: [, b] } = await three();
-    await shared.deleteMarker(db, code, b);
+    const { db, code, me, ids: [, b] } = await three();
+    await shared.deleteMarker(db, code, b, me.id);
     expect(await names(db, code)).toBe('A C');
-    await expect(shared.deleteMarker(db, code, b)).rejects.toThrow(shared.NotFound);
+    await expect(shared.deleteMarker(db, code, b, me.id)).rejects.toThrow(shared.NotFound);
   });
 });
 
 describe('HTTP', () => {
-  const env = () => ({ DB: fakeD1(), ALLOWED_ORIGINS: 'https://giyoooon.github.io' });
+  // 지도 방(Durable Object) 대신: 방에 보낸 알림을 모아 둠
+  const env = () => {
+    const broadcasts: unknown[] = [];
+    const stub = { fetch: async (_url: string, init: RequestInit) => { broadcasts.push(JSON.parse(String(init.body))); return new Response(null, { status: 204 }); } };
+    return { DB: fakeD1(), ALLOWED_ORIGINS: 'https://giyoooon.github.io', broadcasts,
+      ROOMS: { idFromName: (n: string) => n, get: () => stub } };
+  };
+  const pending: Promise<unknown>[] = [];
+  const ctx = { waitUntil: (p: Promise<unknown>) => pending.push(p) };
   const call = (e: ReturnType<typeof env>, method: string, path: string, body?: unknown) =>
     worker.fetch(new Request(`https://api.test${path}`, { method, body: body ? JSON.stringify(body) : undefined,
-      headers: { 'Content-Type': 'application/json', Origin: 'https://giyoooon.github.io' } }), e as never, {} as never);
+      headers: { 'Content-Type': 'application/json', Origin: 'https://giyoooon.github.io' } }), e as never, ctx as never).then(async r => { await Promise.all(pending); return r; });
 
   it('만들기 → 들어가기 → 마킹 → 조회 흐름과 상태 코드', async () => {
     const e = env();

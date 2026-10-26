@@ -8,4 +8,6 @@ export interface Env {
   KAKAO_REST_KEY?: string;
   ALLOWED_ORIGINS?: string;
   DB: D1Database;
+  /** 지도 번호마다 하나인 지도 방 (src/room.ts) */
+  ROOMS: DurableObjectNamespace;
 }

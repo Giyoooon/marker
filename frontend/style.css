@@ -262,3 +262,33 @@ dialog#dlg input:not([type=checkbox]) { width: 100%; }
 .code-msg { min-height: 18px; margin: 8px 0 0; font-size: 12.5px; color: var(--danger); }
 .landing-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; margin-top: 16px; }
 .landing-actions .btn { padding: 10px 6px; }
+
+/* 공유 지도: 접속 중 표시, 활동 기록, 번호 공유 창, 반짝임 */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.room-people .who { position: relative; display: inline-flex; }
+.room-people .who + .who { margin-left: -6px; }
+.room-people .who.away .avatar { opacity: .4; filter: grayscale(.6); }
+.on-dot { position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%; background: #2F9E44; border: 1.5px solid var(--wash); }
+.on-dot.inline { position: static; display: inline-block; margin-left: 2px; border-color: #fff; vertical-align: 1px; }
+.room-people .live { color: var(--ink); font-weight: 700; }
+.activity-btn { position: relative; font-weight: 600; }
+.dot-n { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 4px; border-radius: 999px;
+  background: #E8283C; color: #fff; font-size: 10.5px; font-weight: 800; font-style: normal; vertical-align: 1px; }
+#activity:not([open]) > :not(summary) { display: none; }
+#activity[open] { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #D5D9E1; max-height: 180px; overflow: auto; }
+ol.activity { list-style: none; margin: 0; padding: 0; }
+ol.activity li { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 12.5px; }
+ol.activity li span:not(.avatar) { flex: 1; min-width: 0; }
+ol.activity time { flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.by-line.sub { margin-top: -6px; color: var(--muted); }
+.continue-list { display: flex; flex-direction: column; gap: 6px; }
+.continue-list .continue { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; }
+.continue-list .avatar { border-color: rgba(255,255,255,.6); }
+.chips-row .pick { position: relative; }
+.hint.small { font-size: 12px; margin: 6px 0 0; }
+.code-show { display: flex; gap: 8px; margin: 4px 0 10px; }
+.code-show span { width: 52px; height: 64px; display: grid; place-items: center; border-radius: 12px; background: var(--wash); border: 2px solid var(--line);
+  font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ink); }
+.share-link { margin: 0; max-width: 100%; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li.row.flash { animation: flash 2s ease-out; }
+@keyframes flash { 0%, 30% { background: #FFF3BF; box-shadow: 0 0 0 2px #FCC419; } 100% { background: var(--paper); box-shadow: none; } }

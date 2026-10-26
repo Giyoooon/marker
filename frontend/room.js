@@ -1,16 +1,31 @@
-// 공유 지도: 4자리 번호로 여럿이 같은 지도를 같이 씀 (백엔드 /api/maps, Cloudflare D1)
+// 공유 지도: 4자리 번호로 여럿이 같은 지도를 같이 씀 (백엔드 /api/maps, Cloudflare D1 + 지도 방 Durable Object)
 // app.js 의 상태(state)·화면 함수를 그대로 쓰고, 바뀐 내용을 서버에 보내거나 서버 내용을 받아 와서 맞춤.
-// 로그인 없이 닉네임만 정하고, 그 기기에 기억함 (localStorage: marker-me-<번호>)
+// - 로그인 없이 닉네임만 정하고 그 기기에 기억함 (localStorage: marker-me-<번호>, 이 기기에서 쓴 이름들: marker-nicknames)
+// - 웹소켓으로 지금 접속한 사람(presence)과 다른 사람의 변경을 바로 받음. 끊기면 8초마다 확인으로 대신함
 const Room = (() => {
-  const POLL_MS = 8000;   // 다른 사람이 바꾼 내용을 확인하는 간격
+  const POLL_MS = 8000;           // 웹소켓이 끊겼을 때 확인 간격
+  const POLL_WITH_WS_MS = 30000;  // 웹소켓이 붙어 있어도 이 간격으로 한 번씩 맞춤 (혹시 놓친 알림 대비)
   const AVATAR_COLORS = ['#1864AB', '#C2255C', '#0B7285', '#5F3DC4', '#E67700', '#2B8A3E', '#862E9C', '#495057'];
-  let room = null;        // { code, title, members, me, updatedAt }
+  let room = null;        // { code, title, members, me, updatedAt, online, viewers }
   let pending = 0;        // 서버에 보내는 중인 요청 수 (그동안은 받아 오지 않음)
+  let lastSync = 0;
+  const activity = [];    // 이 화면을 연 뒤 다른 사람들이 한 일 (최신이 앞)
+  let unseen = 0;
+  const flashUntil = new Map();   // 마커 id → 반짝임 끝나는 시각
 
   const meKey = code => `marker-me-${code}`;
   const roomLink = code => `${location.origin}${location.pathname}?map=${code}`;
   const avatarColor = id => AVATAR_COLORS[Math.abs(Number(id) || 0) % AVATAR_COLORS.length];
   const initial = name => [...(name || '?')][0];
+  /** 받침 있으면 a, 없으면 b (예: 을/를, 이/가, 으로/로) */
+  function josa(word, a, b) {
+    const ch = String(word).trim().slice(-1).charCodeAt(0);
+    if (ch < 0xAC00 || ch > 0xD7A3) return a.length > b.length ? a : `${a}(${b})`;   // 한글이 아니면 둘 다 보여 줌
+    const jong = (ch - 0xAC00) % 28;
+    if (a === '으로') return jong === 0 || jong === 8 ? b : a;   // ㄹ 받침은 '로'
+    return jong ? a : b;
+  }
+  const quoted = (name, a, b) => `'${name}'${josa(name, a, b)}`;
 
   async function call(method, path, body) {
     pending++;
@@ -32,7 +47,7 @@ const Room = (() => {
   }
 
   // ───────── 서버 → 화면 ─────────
-  const fromServer = m => ({ id: m.id, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, on: m.on, by: m.markedBy });
+  const fromServer = m => ({ id: m.id, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, on: m.on, by: m.markedBy, updatedBy: m.updatedBy });
   function apply(data) {
     room.title = data.map.title;
     room.members = data.members;
@@ -48,6 +63,7 @@ const Room = (() => {
     if (!force && (pending || dragFrom != null || document.hidden)) return;
     try {
       const data = await call('GET', `/api/maps/${room.code}`);
+      lastSync = Date.now();
       if (force || data.map.updatedAt !== room.updatedAt) apply(data);
     } catch (e) {
       if (e.status === 404) { toast('공유 지도가 지워졌어요. 내 지도로 돌아가요'); setTimeout(leave, 1500); }
@@ -60,6 +76,102 @@ const Room = (() => {
     await refresh(true);
   }
 
+  // ───────── 웹소켓: 접속자와 바로바로 변경 알림 ─────────
+  let ws = null, wsOpen = false, retry = 0, retryTimer = null, pingTimer = null;
+  function connect() {
+    if (!room) return;
+    clearTimeout(retryTimer);
+    if (ws) { ws.onclose = null; ws.close(); }
+    const url = `${API.replace(/^http/, 'ws')}/api/maps/${room.code}/ws${room.me ? `?memberId=${room.me.id}` : ''}`;
+    const sock = ws = new WebSocket(url);
+    sock.onopen = () => {
+      wsOpen = true; retry = 0;
+      clearInterval(pingTimer);
+      pingTimer = setInterval(() => sock.readyState === 1 && sock.send('ping'), 25000);
+      refresh(true);   // 끊겨 있던 동안 바뀐 것 맞추기
+    };
+    sock.onmessage = e => {
+      if (e.data === 'pong') return;
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === 'presence') onPresence(msg);
+      else if (msg.type === 'change') onChange(msg);
+    };
+    sock.onclose = () => {
+      wsOpen = false;
+      clearInterval(pingTimer);
+      room.online = null;   // 모르면 표시하지 않음
+      renderBar();
+      // 1, 2, 4, 8 … 최대 30초 뒤 다시 연결
+      retryTimer = setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++));
+    };
+  }
+
+  function onPresence(p) {
+    const before = room.online ? new Set(room.online.map(o => o.id)) : null;
+    room.online = p.online;
+    room.viewers = p.viewers;
+    if (before) {   // 처음 받은 목록은 알리지 않음
+      for (const o of p.online) {
+        if (!before.has(o.id) && o.id !== room.me?.id) note(`${o.nickname} 님이 들어왔어요`, o);
+      }
+      const now = new Set(p.online.map(o => o.id));
+      for (const id of before) {
+        if (!now.has(id) && id !== room.me?.id) {
+          const m = room.members.find(x => x.id === id);
+          if (m) note(`${m.nickname} 님이 나갔어요`, m, { quiet: true });
+        }
+      }
+    }
+    renderBar();
+  }
+
+  /** 변경 알림 → 다른 사람이 한 일이면 토스트·활동 기록·반짝임, 그리고 서버 상태로 맞춤 */
+  let refreshSoon = null;
+  function onChange(ev) {
+    // 새 닉네임 알림(member.join)은 곧이어 오는 접속 알림('들어왔어요')과 겹쳐서 따로 알리지 않음
+    if (ev.by?.id !== room.me?.id && ev.action !== 'member.join') {
+      note(describe(ev), ev.by);
+      if (ev.marker && ev.action !== 'marker.delete') flashUntil.set(ev.marker.id, Date.now() + 2200);
+    }
+    clearTimeout(refreshSoon);   // 여러 알림이 몰리면 한 번만 맞춤
+    refreshSoon = setTimeout(() => refresh(true), 150);
+  }
+  function describe(ev) {
+    const n = ev.by?.nickname ?? '누군가', name = ev.marker?.name, c = ev.changes || {};
+    switch (ev.action) {
+      case 'marker.add': return `${n} 님이 ${CATS[c.cat]?.icon ?? '📍'} ${quoted(name, '을', '를')} 마킹했어요`;
+      case 'marker.delete': return `${n} 님이 ${quoted(name, '을', '를')} 지웠어요`;
+      case 'marker.update': {
+        const did = [];
+        if ('name' in c) did.push(`이름을 ${quoted(c.name, '으로', '로')}`);
+        if ('cat' in c) { const k = CATS[c.cat]?.name ?? c.cat; did.push(`분류를 ${CATS[c.cat]?.icon ?? ''} ${k}${josa(k, '으로', '로')}`); }
+        if (did.length) return `${n} 님이 '${name}'의 ${did.join(', ')} 바꿨어요`;
+        if (c.on === false) return `${n} 님이 ${quoted(name, '을', '를')} 경로에서 뺐어요`;
+        if (c.on === true) return `${n} 님이 ${quoted(name, '을', '를')} 경로 맨 끝에 넣었어요`;
+        return `${n} 님이 ${quoted(name, '을', '를')} 바꿨어요`;
+      }
+      case 'order': return `${n} 님이 경로 순서를 바꿨어요`;
+      case 'map.update':
+        if ('title' in c) return `${n} 님이 지도 제목을 ${quoted(c.title, '으로', '로')} 바꿨어요`;
+        if ('mode' in c) return `${n} 님이 이동수단을 ${{ car: '🚗 자동차로', transit: '🚌 대중교통으로', walk: '🚶 도보로' }[c.mode]} 바꿨어요`;
+        if ('loop' in c) return `${n} 님이 숙소 왕복을 ${c.loop ? '켰어요' : '껐어요'}`;
+        return `${n} 님이 지도 설정을 바꿨어요`;
+      case 'member.join': return `${n} 님이 처음 들어왔어요`;
+      default: return `${n} 님이 지도를 바꿨어요`;
+    }
+  }
+  /** 활동 기록에 남기고, quiet 가 아니면 토스트로도 알림 */
+  function note(text, by, { quiet = false } = {}) {
+    activity.unshift({ text, by, at: Date.now() });
+    activity.length = Math.min(activity.length, 50);
+    if (!$('#activity')?.open) unseen++;
+    if (!quiet) toast(text);
+    renderBar();
+  }
+  /** app.js 목록에서: 방금 다른 사람이 바꾼 마커면 반짝임 */
+  const isFlashing = id => (flashUntil.get(id) ?? 0) > Date.now();
+
   // ───────── 들어가기 ─────────
   async function enter(rawCode) {
     const code = String(rawCode).trim().toUpperCase();
@@ -69,72 +181,106 @@ const Room = (() => {
     catch (e) { toast(e.status === 404 ? `${code} 지도가 없어요` : `공유 지도를 열지 못했어요: ${e.message}`); return false; }
     let me = null;
     try { me = JSON.parse(localStorage.getItem(meKey(code)) || 'null'); } catch {}
-    room = { code, title: '', members: [], me, updatedAt: '' };
+    room = { code, title: '', members: [], me, updatedAt: '', online: null, viewers: 0 };
     document.body.classList.add('in-room');
     apply(data);
-    setInterval(() => refresh(), POLL_MS);
+    lastSync = Date.now();
+    connect();
+    setInterval(() => { if (Date.now() - lastSync >= (wsOpen ? POLL_WITH_WS_MS : POLL_MS) - 500) refresh(); }, POLL_MS);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-    if (!room.me) askNickname();
+    // 방금 만든 지도면 번호부터 보여 줌, 닉네임이 없으면 닉네임부터
+    if (sessionStorage.getItem('marker-created') === code) { sessionStorage.removeItem('marker-created'); openShare(true); }
+    else if (!room.me) askNickname();
     return true;
   }
   function leave() { location.href = location.pathname; }
+
+  // 이 기기에서 쓴 닉네임들 (최근 것이 앞, 5개까지) — 다른 지도에 들어갈 때 '전에 쓰던 이름'으로 보여 줌
+  const deviceNames = () => { try { return JSON.parse(localStorage.getItem('marker-nicknames') || '[]'); } catch { return []; } };
+  function rememberName(nickname) {
+    localStorage.setItem('marker-nicknames', JSON.stringify([nickname, ...deviceNames().filter(n => n !== nickname)].slice(0, 5)));
+  }
   function rememberMe(member) {
     room.me = { id: member.id, nickname: member.nickname };
     localStorage.setItem(meKey(room.code), JSON.stringify(room.me));
+    rememberName(member.nickname);
     renderBar();
+    connect();   // 닉네임이 생겼으니 '구경'이 아니라 그 이름으로 다시 접속
   }
   function forgetMe() { room.me = null; localStorage.removeItem(meKey(room.code)); }
 
-  // ───────── app.js 가 부르는 변경 ─────────
+  // ───────── app.js 가 부르는 변경 (모두 누가 했는지 memberId 를 붙임) ─────────
   /** 마킹 전에 닉네임이 있어야 함. 없으면 닉네임 창을 띄우고 false */
   function canWrite() {
     if (!room || room.me) return true;
     askNickname();
     return false;
   }
-  const addMarker = m => write('POST', `/api/maps/${room.code}/markers`, { memberId: room.me.id, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
-  const patchMarker = (m, body) => typeof m.id === 'number' && write('PATCH', `/api/maps/${room.code}/markers/${m.id}`, body);
-  const deleteMarker = m => typeof m.id === 'number' && write('DELETE', `/api/maps/${room.code}/markers/${m.id}`);
-  const patchMap = body => write('PATCH', `/api/maps/${room.code}`, body);
+  const me = () => room.me?.id;
+  const addMarker = m => write('POST', `/api/maps/${room.code}/markers`, { memberId: me(), name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
+  const patchMarker = (m, body) => typeof m.id === 'number' && write('PATCH', `/api/maps/${room.code}/markers/${m.id}`, { memberId: me(), ...body });
+  const deleteMarker = m => typeof m.id === 'number' && write('DELETE', `/api/maps/${room.code}/markers/${m.id}?memberId=${me()}`);
+  const patchMap = body => write('PATCH', `/api/maps/${room.code}`, { memberId: me(), ...body });
   /** 경로에 든 마커 순서를 서버에 반영. 아직 서버 id 가 없는(방금 마킹 중인) 마커가 있으면 다음 동기화에 맡김 */
   function pushOrder() {
     const ids = state.markers.filter(m => m.on).map(m => m.id);
-    if (ids.every(id => typeof id === 'number')) write('PUT', `/api/maps/${room.code}/order`, { ids });
+    if (ids.every(id => typeof id === 'number')) write('PUT', `/api/maps/${room.code}/order`, { memberId: me(), ids });
   }
 
-  // ───────── 화면: 위쪽 공유 막대, 닉네임 표시 ─────────
+  // ───────── 화면: 위쪽 공유 막대 ─────────
+  const isOnline = id => !!room.online?.some(o => o.id === id);
   function avatar(member, extra = '') {
     if (!member) return '';
     return `<span class="avatar ${extra}" style="--a:${avatarColor(member.id)}" title="${esc(member.nickname)}">${esc(initial(member.nickname))}</span>`;
   }
-  /** 목록 행·팝업에 붙는 '누가 마킹했는지' */
+  /** 목록 행에 붙는 '누가 마킹했는지' */
   function byBadge(m) {
     if (!room || !m.by) return '';
     return `<span class="avatar by" style="--a:${avatarColor(m.by.id)}" title="${esc(m.by.nickname)} 님이 마킹">${esc(initial(m.by.nickname))}</span>`;
   }
+  /** 팝업에 붙는 마킹한 사람과 마지막으로 바꾼 사람 */
   function byLine(m) {
     if (!room) return '';
-    return m.by
-      ? `<div class="by-line">${avatar(m.by)} <b>${esc(m.by.nickname)}</b> 님이 마킹</div>`
-      : '<div class="by-line">마킹한 사람 정보 없음</div>';
+    const marked = m.by ? `<div class="by-line">${avatar(m.by)} <b>${esc(m.by.nickname)}</b> 님이 마킹</div>` : '<div class="by-line">마킹한 사람 정보 없음</div>';
+    const edited = m.updatedBy ? `<div class="by-line sub">${avatar(m.updatedBy)} <b>${esc(m.updatedBy.nickname)}</b> 님이 마지막으로 바꿈</div>` : '';
+    return marked + edited;
   }
   function renderBar() {
     const bar = $('#roomBar');
     if (!room) { bar.innerHTML = ''; return; }
-    const others = room.members.filter(x => x.id !== room.me?.id);
+    // 접속 중인 사람이 앞, 그다음 나머지
+    const others = room.members.filter(x => x.id !== room.me?.id).sort((a, b) => isOnline(b.id) - isOnline(a.id));
+    const onlineOthers = others.filter(o => isOnline(o.id));
+    const known = room.online != null;
+    const status = !known ? '<span class="muted">연결하는 중…</span>'
+      : onlineOthers.length ? `<span class="muted"><b class="live">${onlineOthers.map(o => esc(o.nickname)).join(', ')}</b> 접속 중${room.viewers ? `, 구경 ${room.viewers}명` : ''}</span>`
+      : `<span class="muted">${others.length ? '지금은 나만 있어요' : '아직 나만 있어요. 번호를 알려 주세요'}${room.viewers ? `, 구경 ${room.viewers}명` : ''}</span>`;
     bar.innerHTML = `
       <div class="room-top">
-        <button class="room-code" data-act="roomCopy" title="링크 복사">${room.code}</button>
+        <button class="room-code" data-act="roomShare" title="번호·링크 공유">${room.code}</button>
         <button class="room-title" data-act="roomRename" title="제목 바꾸기">${esc(room.title)}</button>
+        <button class="link-btn activity-btn" data-act="roomActivity" aria-expanded="${!!$('#activity')?.open}">활동${unseen ? `<span class="dot-n">${unseen}</span>` : ''}</button>
         <button class="link-btn" data-act="roomLeave">내 지도로</button>
       </div>
       <div class="room-people">
         ${room.me ? `<button class="me" data-act="roomNickname" title="닉네임 바꾸기">${avatar(room.me, 'mine')}<b>${esc(room.me.nickname)}</b></button>`
                   : '<button class="me" data-act="roomNickname"><b>닉네임 정하기</b></button>'}
-        ${others.length ? `<span class="others" title="${others.map(o => esc(o.nickname)).join(', ')}">${others.slice(0, 6).map(o => avatar(o)).join('')}${others.length > 6 ? `<span class="more">+${others.length - 6}</span>` : ''}</span>
-          <span class="muted">${others.length === 1 ? esc(others[0].nickname) : `${others.length}명`}과 함께</span>` : '<span class="muted">아직 혼자예요. 번호를 알려 주세요</span>'}
-      </div>`;
+        ${others.length ? `<span class="others">${others.slice(0, 7).map(o => `<span class="who ${known && !isOnline(o.id) ? 'away' : ''}" title="${esc(o.nickname)}${isOnline(o.id) ? ' (접속 중)' : ''}">${avatar(o)}${isOnline(o.id) ? '<i class="on-dot"></i>' : ''}</span>`).join('')}${others.length > 7 ? `<span class="more">+${others.length - 7}</span>` : ''}</span>` : ''}
+        ${status}
+      </div>
+      <details id="activity" ${$('#activity')?.open ? 'open' : ''}>
+        <summary class="sr-only">최근 활동</summary>
+        ${activity.length ? `<ol class="activity">${activity.map(a => `<li>${avatar(a.by)}<span>${esc(a.text)}</span><time>${ago(a.at)}</time></li>`).join('')}</ol>`
+          : '<p class="hint">아직 다른 사람의 활동이 없어요. 누가 마킹하거나 바꾸면 여기에 쌓여요.</p>'}
+      </details>`;
   }
+  function ago(t) {
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return '방금';
+    if (s < 3600) return `${Math.floor(s / 60)}분 전`;
+    return `${Math.floor(s / 3600)}시간 전`;
+  }
+  setInterval(() => { if ($('#activity')?.open) renderBar(); }, 30000);   // 'n분 전' 갱신
 
   // ───────── 대화창 ─────────
   const dlg = () => $('#dlg');
@@ -150,32 +296,79 @@ const Room = (() => {
       if (done !== false) d.close();
     });
     if (!d.open) d.showModal();   // 단계만 바꿀 땐 열린 창 그대로
-    d.querySelector('input:not([type=checkbox])')?.focus();
+    d.querySelector('input:not([type=checkbox]):not([type=radio])')?.focus();
   }
 
+  /**
+   * 닉네임 정하기. 이 기기에서 전에 쓰던 이름이 이 지도에 있으면 맨 위에 '계속하기'로,
+   * 이 지도의 다른 이름들은 골라서 그 사람으로 들어가기, 아니면 새 이름 (이 기기의 최근 이름을 미리 채움)
+   */
   function askNickname() {
-    const names = room.members.map(x => x.nickname);
+    const mine = deviceNames();
+    const known = room.members.filter(x => mine.includes(x.nickname))
+      .sort((a, b) => mine.indexOf(a.nickname) - mine.indexOf(b.nickname));
+    const rest = room.members.filter(x => !known.includes(x));
+    const suggest = mine.find(n => !room.members.some(x => x.nickname === n)) ?? '';
+    const chip = x => `<button class="chip pick" name="pick" value="${esc(x.nickname)}">${avatar(x)} ${esc(x.nickname)}${isOnline(x.id) ? '<i class="on-dot inline" title="지금 접속 중"></i>' : ''}</button>`;
     openDialog(`
       <h2>이 지도에서 쓸 닉네임</h2>
-      <p class="hint"><b>${esc(room.title)}</b> (${room.code}) 에 들어왔어요. 마킹하면 다른 사람들에게 닉네임이 보여요.</p>
-      ${names.length ? `<p class="dlg-label">전에 들어온 적 있다면 내 닉네임을 누르세요</p>
-        <div class="chips-row">${room.members.map(x => `<button class="chip" name="pick" value="${esc(x.nickname)}">${avatar(x)} ${esc(x.nickname)}</button>`).join('')}</div>` : ''}
-      <label class="dlg-label" for="nick">새 닉네임</label>
-      <input id="nick" name="nickname" maxlength="20" placeholder="예: 지윤" autocomplete="nickname">
+      <p class="hint"><b>${esc(room.title)}</b> (${room.code}). 마킹하면 다른 사람들에게 닉네임이 보여요.</p>
+      ${known.length ? `<p class="dlg-label">이 기기에서 쓰던 이름</p>
+        <div class="continue-list">${known.map(x => `<button class="btn primary continue" name="pick" value="${esc(x.nickname)}">${avatar(x)} ${esc(x.nickname)}${josa(x.nickname, '으로', '로')} 계속하기</button>`).join('')}</div>` : ''}
+      ${rest.length ? `<p class="dlg-label">${known.length ? '다른 이름' : '전에 들어온 적 있다면 내 이름을 누르세요'}</p>
+        <div class="chips-row">${rest.map(chip).join('')}</div>
+        ${rest.some(x => isOnline(x.id)) ? '<p class="hint small"><i class="on-dot inline"></i> 표시는 지금 접속 중인 이름이에요</p>' : ''}` : ''}
+      <label class="dlg-label" for="nick">새 이름</label>
+      <input id="nick" name="nickname" maxlength="20" placeholder="예: 지윤" value="${esc(suggest)}" autocomplete="nickname">
       <div class="dlg-actions">
         <button class="btn" value="cancel">구경만 할게요</button>
-        <button class="btn primary" value="new">들어가기</button>
+        <button class="btn ${known.length ? '' : 'primary'}" value="new">새 이름으로 들어가기</button>
       </div>`,
     async (fd, value, form) => {
       const nickname = value === 'new' ? String(fd.get('nickname') || '').trim() : value;
       if (!nickname) { form.querySelector('#nick').focus(); return false; }
+      const taken = room.members.find(x => x.nickname === nickname);
+      if (value === 'new' && taken && !mine.includes(nickname) &&
+          !confirm(`'${nickname}'${josa(nickname, '은', '는')} 이미 있는 이름이에요. 그 사람으로 들어갈까요?`)) return false;
       try {
         const { member } = await call('POST', `/api/maps/${room.code}/members`, { nickname });
         rememberMe(member);
-        toast(`${member.nickname}(으)로 들어왔어요`);
+        toast(`${member.nickname}${josa(member.nickname, '으로', '로')} 들어왔어요`);
         refresh(true);
       } catch (e) { toast(e.message); return false; }
-    });   // 기존 닉네임 칩은 submit 버튼이라 그 value(닉네임)로 들어감
+    });   // 이름 버튼은 submit 버튼이라 그 value(닉네임)로 들어감
+    // 이 기기 이름으로 계속하기가 있으면 그 버튼에, 없으면 새 이름 칸에 초점
+    (dlg().querySelector('.continue') || dlg().querySelector('#nick'))?.focus();
+  }
+
+  /** 번호·링크 공유 창. 방금 만든 지도면 축하 문구로 */
+  function openShare(justCreated = false) {
+    const url = roomLink(room.code);
+    openDialog(`
+      <div class="landing">
+        <span class="landing-pin" aria-hidden="true"></span>
+        <h2>${justCreated ? '공유 지도를 만들었어요' : '같이 꽂을 사람에게 알려 주세요'}</h2>
+        <p class="hint">${esc(room.title)}. 친구가 첫 화면에서 이 번호를 넣거나 링크를 열면 같이 마킹할 수 있어요.</p>
+        <div class="code-show" aria-label="지도 번호">${[...room.code].map(ch => `<span>${ch}</span>`).join('')}</div>
+        <p class="share-link" title="${esc(url)}">${esc(url.replace(/^https?:\/\//, ''))}</p>
+      </div>
+      <div class="landing-actions">
+        <button class="btn" value="copyCode">번호 복사</button>
+        <button class="btn" value="copyLink">링크 복사</button>
+        <button class="btn primary" value="close">${justCreated ? '시작하기' : '닫기'}</button>
+      </div>`,
+    async (fd, value, form) => {
+      if (value === 'close') return;
+      const text = value === 'copyCode' ? room.code : url;
+      try {
+        await navigator.clipboard.writeText(text);
+        const btn = form.querySelector(`[value=${value}]`);
+        btn.textContent = '복사했어요';
+        setTimeout(() => { btn.textContent = value === 'copyCode' ? '번호 복사' : '링크 복사'; }, 1500);
+      } catch { prompt('아래 내용을 복사하세요', text); }
+      return false;
+    });
+    dlg().querySelector('[value=close]').focus();
   }
 
   /**
@@ -236,7 +429,7 @@ const Room = (() => {
       <label class="dlg-label" for="ttl">지도 제목</label>
       <input id="ttl" name="title" maxlength="60" placeholder="예: 대구 1박 2일">
       <label class="dlg-label" for="nick2">내 닉네임</label>
-      <input id="nick2" name="nickname" maxlength="20" placeholder="예: 지윤">
+      <input id="nick2" name="nickname" maxlength="20" placeholder="예: 지윤" value="${esc(deviceNames()[0] ?? '')}">
       ${n ? `<label class="check"><input type="checkbox" name="copy" checked> 지금 내 마커 ${n}개도 같이 올리기</label>` : ''}
       <div class="landing-actions">
         <button class="btn" value="back">뒤로</button>
@@ -251,7 +444,9 @@ const Room = (() => {
         form.querySelector('[value=create]').textContent = '만드는 중…';
         const { map, member } = await call('POST', '/api/maps', { title, nickname });
         localStorage.setItem(meKey(map.code), JSON.stringify({ id: member.id, nickname: member.nickname }));
+        rememberName(member.nickname);
         if (fd.get('copy')) await copyMarkers(map.code, member.id);
+        sessionStorage.setItem('marker-created', map.code);   // 들어가자마자 번호 창을 띄우도록
         location.href = `${location.pathname}?map=${map.code}`;
       } catch (e) {
         toast(e.message);
@@ -264,20 +459,24 @@ const Room = (() => {
   async function copyMarkers(code, memberId) {
     for (const m of state.markers) {
       const { marker } = await call('POST', `/api/maps/${code}/markers`, { memberId, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
-      if (!m.on) await call('PATCH', `/api/maps/${code}/markers/${marker.id}`, { on: false });
+      if (!m.on) await call('PATCH', `/api/maps/${code}/markers/${marker.id}`, { memberId, on: false });
     }
-    await call('PATCH', `/api/maps/${code}`, { mode: state.mode, loop: state.loop });
+    await call('PATCH', `/api/maps/${code}`, { memberId, mode: state.mode, loop: state.loop });
   }
 
   async function rename() {
+    if (!canWrite()) return;
     const title = prompt('지도 제목', room.title)?.trim();
     if (!title || title === room.title) return;
     room.title = title; renderBar();
     await patchMap({ title });
   }
-  function copyLink() {
-    const url = roomLink(room.code);
-    navigator.clipboard.writeText(url).then(() => toast(`공유 지도 링크를 복사했어요 (번호 ${room.code})`), () => prompt('아래 링크를 복사하세요', url));
+  function toggleActivity() {
+    const d = $('#activity');
+    if (!d) return;
+    d.open = !d.open;
+    if (d.open) unseen = 0;
+    renderBar();
   }
 
   // 위쪽 막대 버튼
@@ -286,16 +485,18 @@ const Room = (() => {
     if (!el) return;
     const act = el.dataset.act;
     if (act === 'roomStart') openLanding();
-    else if (act === 'roomCopy') copyLink();
+    else if (act === 'roomShare') openShare();
     else if (act === 'roomRename') rename();
     else if (act === 'roomLeave') leave();
     else if (act === 'roomNickname') askNickname();
+    else if (act === 'roomActivity') toggleActivity();
   });
 
   return {
     active: () => !!room,
     me: () => room?.me || null,
     code: () => room?.code,
-    enter, openLanding, canWrite, addMarker, patchMarker, deleteMarker, patchMap, pushOrder, refresh, copyLink, byBadge, byLine,
+    enter, openLanding, openShare, canWrite, addMarker, patchMarker, deleteMarker, patchMap, pushOrder, refresh,
+    byBadge, byLine, isFlashing,
   };
 })();

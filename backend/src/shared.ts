@@ -1,12 +1,14 @@
 // 공유 지도 API (Cloudflare D1)
 //   POST   /api/maps                         지도 만들기 { title, nickname } → { map, member }
-//   GET    /api/maps/:code                   지도 + 닉네임 + 마커(마킹한 사람 포함)
-//   PATCH  /api/maps/:code                   { title?, mode?, loop? }
+//   GET    /api/maps/:code                   지도 + 닉네임 + 마커(마킹한 사람, 마지막으로 바꾼 사람 포함)
+//   GET    /api/maps/:code/ws?memberId=      웹소켓: 접속자 목록(presence)과 변경 알림 (src/room.ts)
+//   PATCH  /api/maps/:code                   { memberId, title?, mode?, loop? }
 //   POST   /api/maps/:code/members           닉네임으로 들어가기 { nickname } (이미 있는 닉네임이면 그 사람으로)
 //   POST   /api/maps/:code/markers           마킹 { memberId, name, lat, lng, cat? } → 경로 맨 끝
-//   PATCH  /api/maps/:code/markers/:id       { name?, cat?, on? } — on 을 바꾸면 경로 맨 끝 / 뺀 곳 맨 아래로
-//   DELETE /api/maps/:code/markers/:id
-//   PUT    /api/maps/:code/order             { ids } 경로에 든 마커의 새 순서
+//   PATCH  /api/maps/:code/markers/:id       { memberId, name?, cat?, on? } — on 을 바꾸면 경로 맨 끝 / 뺀 곳 맨 아래로
+//   DELETE /api/maps/:code/markers/:id?memberId=
+//   PUT    /api/maps/:code/order             { memberId, ids } 경로에 든 마커의 새 순서
+// 바꾸는 요청은 모두 누가 했는지(memberId)가 필요하고, 결과에 함께 돌려주는 event 를 지도 방(웹소켓)에 알림
 import type { Mode } from './types';
 import { BadRequest } from './validate';
 
@@ -25,15 +27,32 @@ interface MapRow { code: string; title: string; mode: Mode; loop: number; create
 interface MemberRow { id: number; nickname: string; created_at: string; updated_at: string }
 interface MarkerRow {
   id: number; name: string; lat: number; lng: number; cat: string; included: number; position: number;
-  marked_by: number | null; nickname: string | null; created_at: string; updated_at: string;
+  marked_by: number | null; nickname: string | null; updated_by: number | null; updater: string | null;
+  created_at: string; updated_at: string;
 }
+type Who = { id: number; nickname: string };
+
+/** 지도 방에 알리는 변경. by 는 바꾼 사람 */
+export interface ChangeEvent {
+  type: 'change';
+  action: 'map.update' | 'member.join' | 'marker.add' | 'marker.update' | 'marker.delete' | 'order';
+  by: Who;
+  marker?: { id: number; name: string };
+  changes?: Record<string, unknown>;
+  at: string;
+}
+
 const mapOut = (r: MapRow) => ({ code: r.code, title: r.title, mode: r.mode, loop: !!r.loop, createdAt: r.created_at, updatedAt: r.updated_at });
 const memberOut = (r: MemberRow) => ({ id: r.id, nickname: r.nickname, createdAt: r.created_at, updatedAt: r.updated_at });
 const markerOut = (r: MarkerRow) => ({
   id: r.id, name: r.name, lat: r.lat, lng: r.lng, cat: r.cat, on: !!r.included,
   markedBy: r.marked_by == null ? null : { id: r.marked_by, nickname: r.nickname },
+  updatedBy: r.updated_by == null ? null : { id: r.updated_by, nickname: r.updater },
   createdAt: r.created_at, updatedAt: r.updated_at,
 });
+const who = (m: MemberRow): Who => ({ id: m.id, nickname: m.nickname });
+const event = (action: ChangeEvent['action'], by: MemberRow, extra: Partial<ChangeEvent> = {}): ChangeEvent =>
+  ({ type: 'change', action, by: who(by), at: new Date().toISOString(), ...extra });
 
 // ───────── 입력 검증 ─────────
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -70,7 +89,8 @@ async function getMapRow(db: D1Database, code: string): Promise<MapRow> {
   if (!row) throw new NotFound('없는 지도 번호예요');
   return row;
 }
-async function memberOf(db: D1Database, code: string, memberId: unknown): Promise<MemberRow> {
+/** 이 지도의 닉네임인지 확인. 바꾸는 요청은 모두 이걸로 누가 했는지 확인함 */
+export async function memberOf(db: D1Database, code: string, memberId: unknown): Promise<MemberRow> {
   const id = Number(memberId);
   const row = Number.isInteger(id)
     ? await db.prepare('SELECT * FROM members WHERE id = ? AND map_code = ?').bind(id, code).first<MemberRow>()
@@ -78,7 +98,8 @@ async function memberOf(db: D1Database, code: string, memberId: unknown): Promis
   if (!row) throw new BadRequest('memberId: 이 지도의 닉네임이 아니에요. 닉네임을 다시 정해 주세요');
   return row;
 }
-const MARKER_SELECT = `SELECT m.*, u.nickname FROM markers m LEFT JOIN members u ON u.id = m.marked_by`;
+const MARKER_SELECT = `SELECT m.*, u.nickname, w.nickname AS updater FROM markers m
+  LEFT JOIN members u ON u.id = m.marked_by LEFT JOIN members w ON w.id = m.updated_by`;
 async function markerRow(db: D1Database, code: string, id: number): Promise<MarkerRow> {
   const row = await db.prepare(`${MARKER_SELECT} WHERE m.id = ? AND m.map_code = ?`).bind(id, code).first<MarkerRow>();
   if (!row) throw new NotFound('없는 마커예요');
@@ -126,16 +147,17 @@ export async function createMap(db: D1Database, body: unknown) {
 export async function updateMap(db: D1Database, code: string, body: unknown) {
   if (!isObj(body)) throw new BadRequest('JSON 객체가 필요해요');
   await getMapRow(db, code);
-  const sets: string[] = [], args: unknown[] = [];
-  if (body.title !== undefined) { sets.push('title = ?'); args.push(text(body.title, '제목', 60)); }
+  const by = await memberOf(db, code, body.memberId);
+  const sets: string[] = [], args: unknown[] = [], changes: Record<string, unknown> = {};
+  if (body.title !== undefined) { changes.title = text(body.title, '제목', 60); sets.push('title = ?'); args.push(changes.title); }
   if (body.mode !== undefined) {
     if (!MODES.includes(body.mode as Mode)) throw new BadRequest('mode: car | transit | walk');
-    sets.push('mode = ?'); args.push(body.mode);
+    changes.mode = body.mode; sets.push('mode = ?'); args.push(body.mode);
   }
-  if (body.loop !== undefined) { sets.push('loop = ?'); args.push(body.loop ? 1 : 0); }
+  if (body.loop !== undefined) { changes.loop = !!body.loop; sets.push('loop = ?'); args.push(body.loop ? 1 : 0); }
   if (!sets.length) throw new BadRequest('바꿀 값(title, mode, loop)이 없어요');
   await db.prepare(`UPDATE maps SET ${sets.join(', ')} WHERE code = ?`).bind(...args, code).run();
-  return { map: mapOut(await getMapRow(db, code)) };
+  return { map: mapOut(await getMapRow(db, code)), event: event('map.update', by, { changes }) };
 }
 
 /** 닉네임으로 들어가기. 이미 있는 닉네임이면 그 사람으로 들어감 (로그인 없이 기기에 기억하는 방식) */
@@ -146,8 +168,8 @@ export async function joinMap(db: D1Database, code: string, body: unknown) {
   const existing = await db.prepare('SELECT * FROM members WHERE map_code = ? AND nickname = ?').bind(code, nickname).first<MemberRow>();
   if (existing) return { member: memberOut(existing), created: false };
   try {
-    const row = await db.prepare('INSERT INTO members (map_code, nickname) VALUES (?, ?) RETURNING *').bind(code, nickname).first<MemberRow>();
-    return { member: memberOut(row!), created: true };
+    const row = (await db.prepare('INSERT INTO members (map_code, nickname) VALUES (?, ?) RETURNING *').bind(code, nickname).first<MemberRow>())!;
+    return { member: memberOut(row), created: true, event: event('member.join', row) };
   } catch (e) {
     if (!isUniqueError(e)) throw e;   // 동시에 같은 닉네임을 만든 경우
     const row = await db.prepare('SELECT * FROM members WHERE map_code = ? AND nickname = ?').bind(code, nickname).first<MemberRow>();
@@ -158,7 +180,7 @@ export async function joinMap(db: D1Database, code: string, body: unknown) {
 export async function addMarker(db: D1Database, code: string, body: unknown) {
   if (!isObj(body)) throw new BadRequest('JSON 객체가 필요해요');
   await getMapRow(db, code);
-  const member = await memberOf(db, code, body.memberId);
+  const by = await memberOf(db, code, body.memberId);
   const name = text(body.name, '이름', 80);
   const lat = coord(body.lat, 'lat', 32, 39.5), lng = coord(body.lng, 'lng', 124, 132);
   const c = cat(body.cat);
@@ -167,8 +189,9 @@ export async function addMarker(db: D1Database, code: string, body: unknown) {
   try {
     const row = await db.prepare(
       'INSERT INTO markers (map_code, marked_by, name, lat, lng, cat, included, position) VALUES (?, ?, ?, ?, ?, ?, 1, ?) RETURNING id',
-    ).bind(code, member.id, name, lat, lng, c, await nextPosition(db, code, 1)).first<{ id: number }>();
-    return { marker: markerOut(await markerRow(db, code, row!.id)) };
+    ).bind(code, by.id, name, lat, lng, c, await nextPosition(db, code, 1)).first<{ id: number }>();
+    const marker = markerOut(await markerRow(db, code, row!.id));
+    return { marker, event: event('marker.add', by, { marker: { id: marker.id, name }, changes: { cat: c } }) };
   } catch (e) {
     if (isUniqueError(e)) throw new Conflict('이미 마킹한 곳이에요');
     throw e;
@@ -178,40 +201,56 @@ export async function addMarker(db: D1Database, code: string, body: unknown) {
 export async function updateMarker(db: D1Database, code: string, id: number, body: unknown) {
   if (!isObj(body)) throw new BadRequest('JSON 객체가 필요해요');
   const current = await markerRow(db, code, id);
-  const sets: string[] = [], args: unknown[] = [];
-  if (body.name !== undefined) { sets.push('name = ?'); args.push(text(body.name, '이름', 80)); }
-  if (body.cat !== undefined) { sets.push('cat = ?'); args.push(cat(body.cat)); }
+  const by = await memberOf(db, code, body.memberId);
+  const sets: string[] = [], args: unknown[] = [], changes: Record<string, unknown> = {};
+  if (body.name !== undefined) {
+    const name = text(body.name, '이름', 80);
+    if (name !== current.name) { changes.name = name; sets.push('name = ?'); args.push(name); }
+  }
+  if (body.cat !== undefined) {
+    const c = cat(body.cat);
+    if (c !== current.cat) { changes.cat = c; sets.push('cat = ?'); args.push(c); }
+  }
   if (body.on !== undefined) {
     const on = body.on ? 1 : 0;
     if (on !== current.included) {
       // 경로에 넣으면 경로 맨 끝, 빼면 뺀 곳 맨 아래
+      changes.on = !!on;
       sets.push('included = ?', 'position = ?');
       args.push(on, await nextPosition(db, code, on));
     }
   }
-  if (!sets.length) return { marker: markerOut(current) };
+  if (!sets.length) return { marker: markerOut(current) };   // 바뀐 게 없으면 알리지 않음
+  sets.push('updated_by = ?'); args.push(by.id);
   await db.prepare(`UPDATE markers SET ${sets.join(', ')} WHERE id = ? AND map_code = ?`).bind(...args, id, code).run();
-  return { marker: markerOut(await markerRow(db, code, id)) };
+  return {
+    marker: markerOut(await markerRow(db, code, id)),
+    event: event('marker.update', by, { marker: { id, name: current.name }, changes }),
+  };
 }
 
-export async function deleteMarker(db: D1Database, code: string, id: number) {
-  await markerRow(db, code, id);
+export async function deleteMarker(db: D1Database, code: string, id: number, memberId: unknown) {
+  const current = await markerRow(db, code, id);
+  const by = await memberOf(db, code, memberId);
   await db.prepare('DELETE FROM markers WHERE id = ? AND map_code = ?').bind(id, code).run();
-  return { deleted: id };
+  return { deleted: id, event: event('marker.delete', by, { marker: { id, name: current.name } }) };
 }
 
 /** 경로에 든 마커의 순서를 ids 순서로. ids 는 지금 경로에 든 마커 전부여야 함 */
 export async function reorder(db: D1Database, code: string, body: unknown) {
   if (!isObj(body) || !Array.isArray(body.ids)) throw new BadRequest('ids: 마커 id 배열이 필요해요');
   await getMapRow(db, code);
+  const by = await memberOf(db, code, body.memberId);
   const ids = body.ids.map(Number);
-  const rows = await db.prepare('SELECT id FROM markers WHERE map_code = ? AND included = 1').bind(code).all<{ id: number }>();
+  const rows = await db.prepare('SELECT id, position FROM markers WHERE map_code = ? AND included = 1 ORDER BY position, id')
+    .bind(code).all<{ id: number }>();
   const current = new Set(rows.results.map(r => r.id));
   if (ids.length !== current.size || new Set(ids).size !== ids.length || !ids.every(i => current.has(i))) {
     throw new Conflict('그 사이 마커가 바뀌었어요. 새로고침한 뒤 다시 해 주세요');
   }
-  if (ids.length) {
+  const same = rows.results.every((r, k) => r.id === ids[k]);
+  if (!same) {
     await db.batch(ids.map((mid, k) => db.prepare('UPDATE markers SET position = ? WHERE id = ? AND map_code = ?').bind(k, mid, code)));
   }
-  return getMap(db, code);
+  return { ...(await getMap(db, code)), ...(same ? {} : { event: event('order', by) }) };
 }

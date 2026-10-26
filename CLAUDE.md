@@ -30,10 +30,17 @@
 - 새로 만들기 → 제목·내 닉네임으로 공유 지도 생성 → 4자리 번호(`[A-Z0-9]{4}`). 링크는 `?map=번호`
 - 들어가면 닉네임을 정함(기존 닉네임 칩을 누르면 그 사람으로). 로그인 없음, 기기 localStorage `marker-me-<번호>` 에 기억. 닉네임 없으면 구경만(마킹 막힘)
 - 마커마다 마킹한 사람(닉네임 첫 글자 동그라미, 사람마다 색) 표시. 팝업에 "○○ 님이 마킹"
-- 다른 사람 변경은 8초마다 확인(`room.js` `POLL_MS`). 지도 `updated_at` 이 바뀌었을 때만 다시 그림. 내가 보내는 중이거나 끌고 있을 땐 건너뜀
+- 서버 상태로 맞출 땐 지도 `updated_at` 이 바뀌었을 때만 다시 그림. 내가 보내는 중이거나 끌고 있을 땐 건너뜀
 - 쓰기는 화면을 먼저 바꾸고 서버에 보낸 뒤 서버 상태로 다시 맞춤(`Room.write` → `refresh(true)`). 동시 수정은 나중 것이 이김
 - 공유 지도에 있는 동안은 내 지도(`marker-trip`)를 저장하지 않음. "내 지도로" 누르면 원래 내 지도
 - 이동수단·숙소 왕복도 지도 설정으로 공유됨
+- 새로 만들면 바로 번호 공유 창(큰 번호 4칸, 번호 복사·링크 복사). 위쪽 막대의 번호, 아래 "공유" 버튼도 같은 창 (`Room.openShare`)
+- 닉네임 창: 이 기기에서 쓰던 이름(localStorage `marker-nicknames`, 최근 5개)이 그 지도에 있으면 맨 위 "○○로 계속하기", 지도의 다른 이름은 칩(접속 중이면 초록 점), 새 이름 칸엔 이 기기의 안 쓴 최근 이름을 미리 채움
+- **실시간(웹소켓)**: 지도 번호마다 Durable Object `MapRoom`(backend/src/room.ts) 하나. `GET /api/maps/:code/ws?memberId=` 로 접속 → 접속자 목록(presence: 접속 중 닉네임, 구경 수)을 모두에게 보냄. 바꾸는 API 는 응답과 함께 ChangeEvent 를 방에 보내고(`ctx.waitUntil`), 방이 모두에게 전달
+  - 프론트: 다른 사람 변경이면 토스트 + 활동 기록(위쪽 막대 "활동") + 바뀐 행 반짝임, 그리고 서버 상태로 다시 맞춤. 들어옴/나감도 활동에 기록
+  - 웹소켓이 끊기면 1·2·4…30초 간격으로 다시 연결, 그동안은 8초 폴링. 붙어 있어도 30초마다 한 번 맞춤
+  - 바꾸는 요청(PATCH/PUT/DELETE, 마킹)은 모두 `memberId` 필수 — 누가 했는지 알리고 `markers.updated_by`(마지막으로 바꾼 사람)에 기록. 팝업에 "○○ 님이 마지막으로 바꿈"
+  - 웹소켓 메시지로는 아무것도 바꾸지 않음(ping 만). 변경은 반드시 HTTP API 로 (D1 에서 닉네임 확인)
 
 ### 의도적으로 뺀 것 (사용자가 제거 요청)
 자동 일정 짜기(며칠·활동 시간·고정 일정·가볼 곳), 지역 선택·추천 명소, 첫날 출발지·마지막날 도착지 설정, 탭 UI.
@@ -41,7 +48,7 @@
 
 ### 아이디어만 나온 것 (미착수)
 - API 호출 횟수 제한 (지금은 주소만 알면 누구나 호출 → 카카오 사용량 소모)
-- 친구들끼리 가볼 곳 투표 (여럿이 같은 지도 편집은 공유 지도로 구현됨, 실시간 아님 — 8초 폴링)
+- 친구들끼리 가볼 곳 투표
 - 닉네임 보호(지금은 번호만 알면 누구 닉네임으로든 들어갈 수 있음), 공유 지도 삭제·나가기·닉네임 바꾸기 API
 - 명소 운영 시간 반영
 - 맛집 핀(빨강)과 경로선(빨강) 색이 겹침 — 바꿀지 사용자에게 물어본 상태
@@ -51,12 +58,13 @@
 ```
 frontend/   정적 페이지, 빌드 없음 (index.html, style.css, map.js, room.js, app.js)
   map.js    카카오맵 SDK 래퍼(KMap). app.js 는 지도 API 를 직접 부르지 않고 이것만 씀
-  room.js   공유 지도(Room): 들어가기·닉네임·서버 동기화·8초 폴링. app.js 가 바뀌는 지점마다 Room.* 를 부름
+  room.js   공유 지도(Room): 첫 화면·번호 공유·닉네임·웹소켓(접속자, 변경 알림)·서버 동기화. app.js 가 바뀌는 지점마다 Room.* 를 부름
   app.js    상태·화면·이벤트. 경로 계산·검색은 전부 백엔드 호출
   config.js git 제외. 배포 때 GitHub Actions 가 저장소 Variables 로 생성
 backend/    Cloudflare Worker (TypeScript)
   index.ts  라우터·CORS: /api/health, /api/search, /api/route, /api/maps...
-  shared.ts 공유 지도 API (D1). 맨 위 주석에 엔드포인트 목록
+  shared.ts 공유 지도 API (D1). 맨 위 주석에 엔드포인트 목록. 바꾸는 함수는 { ..., event } 를 돌려줌
+  room.ts   지도 방 Durable Object (웹소켓 Hibernation API). presenceOf 는 순수 함수
   migrations/ D1 스키마 (CI 가 배포 전에 원격 적용). 모든 테이블 created_at·updated_at, 트리거로 갱신
   route.ts  경로 계산 (순서 최적화, 왕복, 구간별 도로 경로·폴백)
   order.ts  방문 순서 최적화 (최근접 이웃 + 2-opt + or-opt, 순수 함수)
@@ -117,6 +125,13 @@ npx http-server frontend -p 8080 -s -c-1
 - 같은 지도 같은 좌표(소수 5자리) 중복 마킹 금지(UNIQUE), 지도당 마커 31개
 - 마킹한 사람(members)이 지워져도 마커는 남고 `marked_by` 는 NULL
 - 로컬 개발: `npx wrangler d1 migrations apply marker --local` 후 `npm run dev`
+
+### Durable Objects (지도 방)
+- 바인딩 `ROOMS`, 클래스 `MapRoom`. 무료 플랜이라 `new_sqlite_classes` 로 선언(wrangler.toml `[[migrations]]`). 클래스 이름을 바꾸거나 지울 땐 새 migrations 태그가 필요
+- 웹소켓 응답(101)은 index.ts 에서 CORS 헤더를 다시 감싸지 않고 그대로 돌려줌 (감싸면 연결이 끊김)
+- 웹소켓 접속은 `ALLOWED_ORIGINS` 출처만. memberId 는 Worker 가 D1 에서 확인한 뒤 닉네임과 함께 방에 넘김 (모르는 id 면 구경으로)
+- 테스트는 `cloudflare:workers` 를 `test/cloudflare-workers-stub.ts` 로 바꿔서 Node 에서 돌림 (vitest.config.ts alias). 실제 웹소켓은 `wrangler dev` 로 확인
+- 로컬에서 8787/8080 포트에 예전 개발 서버 소켓이 남아 응답이 멈추는 일이 잦음 → 다른 포트(`npx wrangler dev --port 8796 --var ALLOWED_ORIGINS:http://localhost:8097`)로 띄우고 config.js 의 API_BASE 를 잠깐 바꿔서 테스트, 끝나면 되돌리기
 
 ### 프론트
 - 빌드 도구·프레임워크 없음. 순수 HTML/CSS/JS 유지
