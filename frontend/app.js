@@ -284,7 +284,7 @@ function renderList() {
 
   // 경로에서 뺀 곳: 순서가 없으니 번호·손잡이·▲▼ 없이 아래에 모아 둠
   if (offRows.length) {
-    html += `<h2 class="sec">경로에서 뺀 곳 <span class="n">${offRows.length}</span></h2><ol class="list">`;
+    html += `<section class="off-sec"><h2 class="sec">경로에서 뺀 곳 <span class="n">${offRows.length}</span></h2><ol class="list">`;
     offRows.forEach(({ m, i }) => {
       const c = cat(m);
       html += `<li class="row off" data-i="${i}" style="--c:${c.color}">
@@ -294,7 +294,7 @@ function renderList() {
         <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
       </li>`;
     });
-    html += '</ol>';
+    html += '</ol></section>';
   }
   box.innerHTML = html;
 }

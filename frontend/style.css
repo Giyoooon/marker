@@ -81,7 +81,10 @@ button { font: inherit; color: inherit; }
 .note { background: #FFF8E1; border: 1px solid #FFE08A; border-radius: var(--r-sm); padding: 8px 10px; font-size: 12.5px; margin-bottom: 12px; line-height: 1.5; }
 
 /* ── 마커 목록 ── */
-#markers { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
+#markers { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; }
+#markers > * { flex: none; }
+/* 경로에서 뺀 곳은 목록이 짧아도 사이드바 맨 아래에 붙음 */
+.off-sec { margin-top: auto; }
 .filters { display: flex; gap: 6px; margin: 0 -16px 14px; padding: 0 16px 2px; overflow-x: auto; scrollbar-width: none; }
 .filters::-webkit-scrollbar { display: none; }
 .chip { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper);
@@ -196,7 +199,7 @@ li.leg.active .what b { color: #C2172B; }
 li.leg.dim { opacity: .45; }
 
 /* 경로에서 뺀 곳 묶음 */
-h2.sec { display: flex; align-items: center; gap: 6px; margin: 22px 0 8px; padding-top: 14px; border-top: 1px dashed var(--line);
+h2.sec { display: flex; align-items: center; gap: 6px; margin: 28px 0 8px; padding-top: 14px; border-top: 1px dashed var(--line);
   font-size: 13px; font-weight: 700; color: var(--muted); }
 h2.sec .n { font-weight: 500; font-variant-numeric: tabular-nums; }
 li.row.off { padding-left: 10px; }
