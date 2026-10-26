@@ -292,3 +292,5 @@ ol.activity time { flex: none; color: var(--muted); font-size: 11.5px; font-vari
 .share-link { margin: 0; max-width: 100%; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 li.row.flash { animation: flash 2s ease-out; }
 @keyframes flash { 0%, 30% { background: #FFF3BF; box-shadow: 0 0 0 2px #FCC419; } 100% { background: var(--paper); box-shadow: none; } }
+dialog#dlg .redo { align-self: center; margin-top: 12px; padding: 4px 8px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #C9CED8; }
+dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor; }

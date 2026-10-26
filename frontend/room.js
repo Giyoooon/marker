@@ -364,9 +364,11 @@ const Room = (() => {
         <button class="btn" value="copyCode">번호 복사</button>
         <button class="btn" value="copyLink">링크 복사</button>
         <button class="btn primary" value="close">${justCreated ? '시작하기' : '닫기'}</button>
-      </div>`,
+      </div>
+      ${justCreated ? '<button class="link-btn redo" value="redo" title="이 공유 지도에서 나가 첫 화면으로">다시할래요</button>' : ''}`,
     async (fd, value, form) => {
       if (value === 'close') return;
+      if (value === 'redo') { leave(); return false; }   // 첫 화면(번호 입력)으로. 만든 지도는 서버에 남음
       const text = value === 'copyCode' ? room.code : url;
       try {
         await navigator.clipboard.writeText(text);
