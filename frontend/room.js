@@ -15,7 +15,9 @@ const Room = (() => {
   async function call(method, path, body) {
     pending++;
     try {
+      // 서버가 응답하지 않으면 10초 뒤 포기 (버튼이 "찾는 중…"에 멈춰 있지 않게)
       const res = await fetch(API + path, {
+        signal: AbortSignal.timeout(10000),
         method,
         headers: body ? { 'Content-Type': 'application/json' } : undefined,
         body: body ? JSON.stringify(body) : undefined,
@@ -23,6 +25,9 @@ const Room = (() => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { const err = new Error(data.error || `서버 응답 ${res.status}`); err.status = res.status; throw err; }
       return data;
+    } catch (e) {
+      if (e.name === 'TimeoutError') throw new Error('서버가 응답하지 않아요. 잠시 뒤 다시 해 주세요');
+      throw e;
     } finally { pending--; }
   }
 
@@ -144,7 +149,7 @@ const Room = (() => {
       const done = await onSubmit(new FormData(form), btn?.value, form);
       if (done !== false) d.close();
     });
-    d.showModal();
+    if (!d.open) d.showModal();   // 단계만 바꿀 땐 열린 창 그대로
     d.querySelector('input:not([type=checkbox])')?.focus();
   }
 
@@ -173,30 +178,72 @@ const Room = (() => {
     });   // 기존 닉네임 칩은 submit 버튼이라 그 value(닉네임)로 들어감
   }
 
-  function openStart() {
+  /**
+   * 첫 화면: 뒤를 어둡게 가리고 지도 번호 입력 상자 + [그냥할래요] [새로 만들기] [같이하기]
+   * 그냥할래요(또는 Esc)는 닫고 내 지도로, 새로 만들기는 같은 창에서 제목·닉네임 입력으로 넘어감
+   */
+  function openLanding() {
+    openDialog(`
+      <div class="landing">
+        <span class="landing-pin" aria-hidden="true"></span>
+        <h2>같이 꽂을까요?</h2>
+        <p class="hint">친구에게 받은 지도 번호를 넣으면 같은 지도에 같이 마킹할 수 있어요.</p>
+        <input class="code-box" name="code" maxlength="4" placeholder="A1B2" autocomplete="off" autocapitalize="characters"
+          spellcheck="false" aria-label="지도 번호 4자리" aria-describedby="codeMsg">
+        <p class="code-msg" id="codeMsg" role="alert"></p>
+      </div>
+      <div class="landing-actions">
+        <button class="btn" value="cancel">그냥할래요</button>
+        <button class="btn" value="create">새로 만들기</button>
+        <button class="btn primary" value="join">같이하기</button>
+      </div>`,
+    async (fd, value, form) => {
+      if (value === 'create') { openCreate(); return false; }
+      const msg = form.querySelector('#codeMsg'), box = form.querySelector('[name=code]');
+      const code = String(fd.get('code') || '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{4}$/.test(code)) { msg.textContent = '영문과 숫자 4자리를 넣어 주세요'; box.focus(); return false; }
+      msg.textContent = '';
+      const btn = form.querySelector('[value=join]');
+      btn.disabled = true; btn.textContent = '찾는 중…';
+      try {
+        await call('GET', `/api/maps/${code}`);
+        location.href = `${location.pathname}?map=${code}`;
+        return false;   // 이동할 때까지 창 유지
+      } catch (e) {
+        msg.textContent = e.status === 404 ? `${code} 지도는 없어요. 번호를 다시 확인해 주세요` : `지도를 열지 못했어요 (${e.message})`;
+        btn.disabled = false; btn.textContent = '같이하기';
+        box.select();
+        return false;
+      }
+    });
+    const box = dlg().querySelector('[name=code]');
+    // 입력은 대문자로, Enter 는 같이하기 (폼 기본 동작이면 첫 버튼인 '그냥할래요'가 눌림)
+    box.addEventListener('input', () => {
+      box.value = box.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      dlg().querySelector('#codeMsg').textContent = '';
+    });
+    box.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); dlg().querySelector('[value=join]').click(); }
+    });
+  }
+
+  /** 새 공유 지도 만들기 (첫 화면의 '새로 만들기' 다음 단계) */
+  function openCreate() {
     const n = state.markers.length;
     openDialog(`
-      <h2>같이 꽂기</h2>
-      <p class="hint">공유 지도를 만들면 4자리 번호가 생겨요. 번호를 아는 사람은 누구나 같이 마킹할 수 있어요.</p>
+      <h2>새 공유 지도</h2>
+      <p class="hint">만들면 4자리 번호가 생겨요. 번호를 아는 사람은 누구나 같이 마킹할 수 있어요.</p>
       <label class="dlg-label" for="ttl">지도 제목</label>
       <input id="ttl" name="title" maxlength="60" placeholder="예: 대구 1박 2일">
       <label class="dlg-label" for="nick2">내 닉네임</label>
       <input id="nick2" name="nickname" maxlength="20" placeholder="예: 지윤">
       ${n ? `<label class="check"><input type="checkbox" name="copy" checked> 지금 내 마커 ${n}개도 같이 올리기</label>` : ''}
-      <div class="dlg-actions"><button class="btn primary" value="create">공유 지도 만들기</button></div>
-      <div class="dlg-or">또는 받은 번호로 들어가기</div>
-      <div class="join-row">
-        <input name="code" maxlength="4" placeholder="번호 4자리" autocapitalize="characters" aria-label="지도 번호">
-        <button class="btn" value="join">들어가기</button>
-      </div>
-      <div class="dlg-actions"><button class="btn" value="cancel">닫기</button></div>`,
+      <div class="landing-actions">
+        <button class="btn" value="back">뒤로</button>
+        <button class="btn primary" value="create">만들기</button>
+      </div>`,
     async (fd, value, form) => {
-      if (value === 'join') {
-        const code = String(fd.get('code') || '').trim().toUpperCase();
-        if (!/^[A-Z0-9]{4}$/.test(code)) { toast('번호는 영문·숫자 4자리예요'); form.querySelector('[name=code]').focus(); return false; }
-        location.href = `${location.pathname}?map=${code}`;
-        return;
-      }
+      if (value === 'back') { openLanding(); return false; }
       const title = String(fd.get('title') || '').trim(), nickname = String(fd.get('nickname') || '').trim();
       if (!title) { form.querySelector('#ttl').focus(); return false; }
       if (!nickname) { form.querySelector('#nick2').focus(); return false; }
@@ -208,7 +255,7 @@ const Room = (() => {
         location.href = `${location.pathname}?map=${map.code}`;
       } catch (e) {
         toast(e.message);
-        form.querySelector('[value=create]').textContent = '공유 지도 만들기';
+        form.querySelector('[value=create]').textContent = '만들기';
         return false;
       }
     });
@@ -238,7 +285,7 @@ const Room = (() => {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const act = el.dataset.act;
-    if (act === 'roomStart') openStart();
+    if (act === 'roomStart') openLanding();
     else if (act === 'roomCopy') copyLink();
     else if (act === 'roomRename') rename();
     else if (act === 'roomLeave') leave();
@@ -249,6 +296,6 @@ const Room = (() => {
     active: () => !!room,
     me: () => room?.me || null,
     code: () => room?.code,
-    enter, canWrite, addMarker, patchMarker, deleteMarker, patchMap, pushOrder, refresh, copyLink, byBadge, byLine,
+    enter, openLanding, canWrite, addMarker, patchMarker, deleteMarker, patchMap, pushOrder, refresh, copyLink, byBadge, byLine,
   };
 })();

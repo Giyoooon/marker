@@ -591,7 +591,12 @@ list.addEventListener('dragend', () => {
 function showMapError(html) { const el = $('#mapError'); el.innerHTML = `<div>${html}</div>`; el.classList.add('on'); }
 
 (async function start() {
+  const fromLink = location.hash.startsWith('#t=');   // 내 지도 공유 링크로 들어온 경우
+  // ?map=번호 로 열면 공유 지도, 아니면 내 지도(브라우저 저장)
+  const code = new URLSearchParams(location.search).get('map');
   state = load();
+  // 첫 화면: 지도가 뜨기 전에 바로 번호 입력 창 (같이하기 / 새로 만들기 / 그냥할래요)
+  if (!code && !fromLink) Room.openLanding();
   try {
     await KMap.init($('#map'), { appKey: CONFIG.KAKAO_JS_KEY, center: [DEFAULT_VIEW.lat, DEFAULT_VIEW.lng], level: DEFAULT_VIEW.level,
       onClick: onMapClick, onAction, onIdle: renderRouteLines });
@@ -599,8 +604,6 @@ function showMapError(html) { const el = $('#mapError'); el.innerHTML = `<div>${
     showMapError(`카카오맵을 불러오지 못했어요: ${esc(e.message)}<br>
       카카오 개발자 콘솔 > 앱 > 플랫폼 > Web 에 <b>${esc(location.origin)}</b> 가 등록돼 있는지 확인하세요.`);
   }
-  // ?map=번호 로 열면 공유 지도, 아니면 내 지도(브라우저 저장)
-  const code = new URLSearchParams(location.search).get('map');
   if (!code || !(await Room.enter(code))) changed();
   fitAll();
 })();

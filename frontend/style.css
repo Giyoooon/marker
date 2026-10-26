@@ -24,6 +24,7 @@ body {
   font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   color: var(--ink); background: var(--wash); font-size: 14px; line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  word-break: keep-all;   /* 한글은 낱말 단위로 줄바꿈 */
 }
 :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 b, strong { font-weight: 700; }
@@ -234,7 +235,7 @@ li.row .avatar.by { width: 20px; height: 20px; font-size: 10.5px; }
 
 /* 대화창 */
 dialog#dlg { border: 0; border-radius: 14px; padding: 0; width: min(400px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(30,42,68,.3); color: var(--ink); }
-dialog#dlg::backdrop { background: rgba(30, 42, 68, .35); }
+dialog#dlg::backdrop { background: rgba(20, 28, 46, .58); backdrop-filter: blur(2px); }
 dialog#dlg form { padding: 20px 20px 16px; display: flex; flex-direction: column; }
 dialog#dlg h2 { margin: 0 0 6px; font-size: 17px; font-weight: 800; }
 dialog#dlg input:not([type=checkbox]) { width: 100%; }
@@ -247,3 +248,17 @@ dialog#dlg input:not([type=checkbox]) { width: 100%; }
 .chips-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips-row .chip { gap: 6px; padding-left: 3px; }
 .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; cursor: pointer; }
+
+/* 첫 화면 (번호 입력) */
+.landing { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 6px 4px 0; }
+.landing-pin { width: 30px; height: 30px; background: var(--ink); border-radius: 50% 50% 50% 0; transform: rotate(-45deg); margin: 6px 0 16px; }
+.landing h2 { font-size: 20px !important; }
+.landing .hint { margin: 2px 0 16px; max-width: 280px; }
+.code-box { width: 100% !important; max-width: 240px; padding: 12px 10px !important; text-align: center; font-size: 30px !important; font-weight: 800;
+  letter-spacing: .35em; text-indent: .35em; text-transform: uppercase; font-variant-numeric: tabular-nums;
+  border: 2px solid var(--line) !important; border-radius: 12px !important; }
+.code-box:focus { border-color: var(--ink) !important; }
+.code-box::placeholder { color: #D5D9E1; }
+.code-msg { min-height: 18px; margin: 8px 0 0; font-size: 12.5px; color: var(--danger); }
+.landing-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; margin-top: 16px; }
+.landing-actions .btn { padding: 10px 6px; }
