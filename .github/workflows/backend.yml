@@ -28,6 +28,14 @@ jobs:
       - run: npm test
       # 저장소 Settings > Secrets and variables > Actions > Secrets 의 CLOUDFLARE_API_TOKEN 사용
       # (KAKAO_REST_KEY 는 Cloudflare 에 저장돼 있어 배포해도 유지됨)
+      - name: Check Cloudflare token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Repository secret CLOUDFLARE_API_TOKEN 이 없어요 (Settings > Secrets and variables > Actions > Secrets 탭)"
+            exit 1
+          fi
       - run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
