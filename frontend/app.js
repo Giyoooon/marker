@@ -53,7 +53,7 @@ function fromSaved(obj) {
   return {
     mode: MODES[obj.mode] ? obj.mode : 'car',
     loop: obj.loop !== false,
-    markers: list.filter(p => p && isFinite(p.lat) && isFinite(p.lng)).map(pick),
+    markers: partition(list.filter(p => p && isFinite(p.lat) && isFinite(p.lng)).map(pick)),
   };
 }
 const serialize = () => JSON.stringify({ mode: state.mode, loop: state.loop,
@@ -73,12 +73,25 @@ function load() {
   return { mode: 'car', loop: true, markers: [] };
 }
 
+// markers 는 항상 [경로에 든 마커..., 경로에서 뺀 마커...] 순서. 앞쪽 순서가 방문 순서
+const partition = list => [...list.filter(m => m.on), ...list.filter(m => !m.on)];
+const onCount = () => state.markers.filter(m => m.on).length;
+/** 경로에 넣으면 경로 맨 끝으로, 빼면 '경로에서 뺀 곳' 맨 아래로 */
+function setOn(i, on) {
+  const [m] = state.markers.splice(i, 1);
+  m.on = on;
+  state.markers.splice(on ? onCount() : state.markers.length, 0, m);
+  KMap.ready() && KMap.closePopup();
+  changed();
+  toast(on ? `${m.name}, 경로 맨 끝에 넣었어요` : `${m.name}, 경로에서 뺐어요`);
+}
+
 const isMarked = p => state.markers.some(m => posKey(m) === posKey(p));
 function mark(p) {
   if (isMarked(p)) { toast('이미 마킹한 곳이에요'); return; }
   if (state.markers.length >= MAX_MARKERS) { toast(`마커는 ${MAX_MARKERS}개까지 꽂을 수 있어요`); return; }
   const m = pick({ name: p.name || '이름 없는 곳', lat: p.lat, lng: p.lng, cat: p.cat });
-  state.markers.push(m);
+  state.markers.splice(onCount(), 0, m);   // 경로 맨 끝 (뺀 마커들보다 앞)
   KMap.ready() && KMap.closePopup();
   if (filter !== 'all' && filter !== m.cat) filter = 'all';
   changed();
@@ -149,12 +162,13 @@ async function optimize() {
   }
 }
 function swap(i, j) {
-  if (j < 0 || j >= state.markers.length) return;
+  if (j < 0 || j >= onCount()) return;   // 경로 안에서만
   [state.markers[i], state.markers[j]] = [state.markers[j], state.markers[i]];
   changed();
 }
 /** from 번째 마커를 to 자리(원래 배열 기준 삽입 위치)로 옮김 */
 function move(from, to) {
+  to = Math.min(to, onCount());   // 경로에서 뺀 곳 사이로는 못 들어감
   if (to > from) to--;
   if (to === from) return;
   const [p] = state.markers.splice(from, 1);
@@ -225,27 +239,31 @@ function renderList() {
   }
   info?.warnings.forEach(w => html += `<div class="note">${esc(w)}</div>`);
 
-  // 마커 목록 (구간은 '전체' 보기에서만 — 걸러 보면 앞뒤 순서가 안 보여서)
+  // 경로 목록 (구간은 '전체' 보기에서만 — 걸러 보면 앞뒤 순서가 안 보여서)
   // 숙소 왕복이면 숙소를 맨 위 출발지로 고정해서 보여 줌 (목록 안 실제 자리와 상관없이)
   const showLegs = filter === 'all';
   const stayCand = M.find(m => m.on && m.cat === 'stay');
-  let rows = M.map((m, i) => ({ m, i })).filter(({ m }) => filter === 'all' || m.cat === filter);
+  const visible = M.map((m, i) => ({ m, i })).filter(({ m }) => filter === 'all' || m.cat === filter);
+  let rows = visible.filter(r => r.m.on);
+  const offRows = visible.filter(r => !r.m.on);
+  const lastOn = onCount() - 1;
   if (P.stay) rows = [...rows.filter(r => r.m === P.stay), ...rows.filter(r => r.m !== P.stay)];
+  const catPicker = (m, i, c) => `<label class="cat" title="분류: ${c.name}"><span aria-hidden="true">${c.icon}</span>
+    <select class="cat-sel" data-i="${i}" aria-label="${esc(m.name)} 분류">
+      ${Object.entries(CATS).map(([k, cc]) => `<option value="${k}" ${k === m.cat ? 'selected' : ''}>${cc.icon} ${cc.name}</option>`).join('')}
+    </select></label>`;
   html += '<ol class="list">';
   rows.forEach(({ m, i }) => {
     const c = cat(m), pinned = P.stay === m;
-    const badge = pinned ? '🏨' : num.get(m.id) ?? '–';
-    html += `<li class="row ${m.on ? '' : 'off'} ${pinned ? 'pinned' : ''}" ${pinned ? '' : 'draggable="true"'} data-i="${i}" style="--c:${c.color}">
-      <input type="checkbox" class="inc" data-i="${i}" ${m.on ? 'checked' : ''} aria-label="${esc(m.name)} 경로에 포함">
+    const badge = pinned ? '🏨' : num.get(m.id);
+    html += `<li class="row ${pinned ? 'pinned' : ''}" ${pinned ? '' : 'draggable="true"'} data-i="${i}" style="--c:${c.color}">
+      <input type="checkbox" class="inc" data-i="${i}" checked aria-label="${esc(m.name)} 경로에서 빼기">
       <span class="grip" title="${pinned ? '숙소는 출발지로 고정돼요' : '끌어서 순서 바꾸기'}" aria-hidden="true">${pinned ? '' : '⠿'}</span>
-      <span class="num" title="${pinned ? '출발·복귀' : m.on ? '방문 순서' : '경로에서 빠짐'}">${badge}</span>
+      <span class="num" title="${pinned ? '출발·복귀' : '방문 순서'}">${badge}</span>
       <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
-      <label class="cat" title="분류: ${c.name}"><span aria-hidden="true">${c.icon}</span>
-        <select class="cat-sel" data-i="${i}" aria-label="${esc(m.name)} 분류">
-          ${Object.entries(CATS).map(([k, cc]) => `<option value="${k}" ${k === m.cat ? 'selected' : ''}>${cc.icon} ${cc.name}</option>`).join('')}
-        </select></label>
+      ${catPicker(m, i, c)}
       <button class="icon-btn" data-act="up" data-i="${i}" ${i === 0 || pinned ? 'disabled' : ''} aria-label="위로">▲</button>
-      <button class="icon-btn" data-act="down" data-i="${i}" ${i === M.length - 1 || pinned ? 'disabled' : ''} aria-label="아래로">▼</button>
+      <button class="icon-btn" data-act="down" data-i="${i}" ${i === lastOn || pinned ? 'disabled' : ''} aria-label="아래로">▼</button>
       <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
     </li>`;
     // 첫 숙소 바로 아래: 출발·복귀 스위치와 첫 구간
@@ -260,7 +278,24 @@ function renderList() {
     if (leg) html += `<li class="leg" data-at="${i + 1}" data-leg="${leg.k}">${legInner(leg.leg, leg.from, leg.to, leg.back ? '🏨 숙소로 ' : '')}</li>`;
   });
   html += '</ol>';
-  if (!rows.length) html += '<p class="hint">이 분류에는 아직 마커가 없어요.</p>';
+  if (!rows.length) html += offRows.length
+    ? '<p class="hint">경로에 든 곳이 없어요. 아래에서 체크하면 경로 맨 끝에 붙어요.</p>'
+    : '<p class="hint">이 분류에는 아직 마커가 없어요.</p>';
+
+  // 경로에서 뺀 곳: 순서가 없으니 번호·손잡이·▲▼ 없이 아래에 모아 둠
+  if (offRows.length) {
+    html += `<h2 class="sec">경로에서 뺀 곳 <span class="n">${offRows.length}</span></h2><ol class="list">`;
+    offRows.forEach(({ m, i }) => {
+      const c = cat(m);
+      html += `<li class="row off" data-i="${i}" style="--c:${c.color}">
+        <input type="checkbox" class="inc" data-i="${i}" aria-label="${esc(m.name)} 경로 맨 끝에 넣기" title="체크하면 경로 맨 끝에 붙어요">
+        <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
+        ${catPicker(m, i, c)}
+        <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
+      </li>`;
+    });
+    html += '</ol>';
+  }
   box.innerHTML = html;
 }
 
@@ -461,7 +496,7 @@ function onAction(e) {
   else if (act === 'focus') { const p = state.markers[i]; if (KMap.ready()) { KMap.focus(p.lat, p.lng); openMarkerPopup(i); } }
   else if (act === 'up') swap(i, i - 1);
   else if (act === 'down') swap(i, i + 1);
-  else if (act === 'toggleOn') { state.markers[i].on = !state.markers[i].on; KMap.ready() && KMap.closePopup(); changed(); }
+  else if (act === 'toggleOn') setOn(i, !state.markers[i].on);
   else if (act === 'del') {
     const [m] = state.markers.splice(i, 1);
     KMap.ready() && KMap.closePopup();
@@ -476,7 +511,7 @@ function onAction(e) {
 }
 $('#markers').addEventListener('change', e => {
   const el = e.target, i = +el.dataset.i;
-  if (el.classList.contains('inc')) state.markers[i].on = el.checked;
+  if (el.classList.contains('inc')) return setOn(i, el.checked);
   else if (el.classList.contains('cat-sel')) state.markers[i].cat = el.value;
   else if (el.id === 'loopToggle') state.loop = el.checked;
   else return;
@@ -502,7 +537,7 @@ $('#markers').addEventListener('click', e => {
 let dragFrom = null;
 const list = $('#markers');
 function dropTarget(e) {
-  const row = e.target.closest('li.row, li.leg');
+  const row = e.target.closest('li.row:not(.off), li.leg');
   if (!row) return null;
   if (row.classList.contains('leg')) return { row, to: +row.dataset.at, cls: 'drop-on' };
   const r = row.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;

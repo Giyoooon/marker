@@ -194,3 +194,10 @@ li.leg[data-leg]:hover, li.leg.active { background: #FFF0F1; }
 li.leg.active::before { border-left: 2px solid #E8283C; }
 li.leg.active .what b { color: #C2172B; }
 li.leg.dim { opacity: .45; }
+
+/* 경로에서 뺀 곳 묶음 */
+h2.sec { display: flex; align-items: center; gap: 6px; margin: 22px 0 8px; padding-top: 14px; border-top: 1px dashed var(--line);
+  font-size: 13px; font-weight: 700; color: var(--muted); }
+h2.sec .n { font-weight: 500; font-variant-numeric: tabular-nums; }
+li.row.off { padding-left: 10px; }
+li.row.off .name { padding-left: 2px; }
