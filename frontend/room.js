@@ -61,7 +61,7 @@ const Room = (() => {
     room.members = data.members;
     room.updatedAt = data.map.updatedAt;
     if (room.me && !room.members.some(x => x.id === room.me.id)) forgetMe();
-    state = { mode: data.map.mode, loop: data.map.loop, markers: partition(data.markers.map(fromServer)) };
+    state = { mode: data.map.mode, loop: data.map.loop, legModes: cleanLegModes(data.map.legModes), markers: partition(data.markers.map(fromServer)) };
     renderBar();
     changed();   // 목록·지도·경로 다시 그림 (공유 지도에선 브라우저에 저장하지 않음)
   }
@@ -197,10 +197,20 @@ const Room = (() => {
         if ('title' in c) return `${n} 님이 지도 제목을 ${quoted(c.title, '으로', '로')} 바꿨어요`;
         if ('mode' in c) return `${n} 님이 이동수단을 ${{ car: '🚗 자동차로', transit: '🚌 대중교통으로', walk: '🚶 도보로' }[c.mode]} 바꿨어요`;
         if ('loop' in c) return `${n} 님이 숙소 왕복을 ${c.loop ? '켰어요' : '껐어요'}`;
+        if ('legModes' in c) return describeLegModes(n, c.legModes);
         return `${n} 님이 지도 설정을 바꿨어요`;
       case 'member.join': return `${n} 님이 처음 들어왔어요`;
       default: return `${n} 님이 지도를 바꿨어요`;
     }
+  }
+  /** 구간 이동수단 변경: 지금 화면 상태(바뀌기 전)와 비교해서 어느 구간이 무엇으로 바뀌었는지 */
+  function describeLegModes(n, next) {
+    const name = key => state.markers.find(m => posKey(m) === key)?.name ?? '?';
+    const keys = new Set([...Object.keys(next || {}), ...Object.keys(state.legModes)]);
+    const diff = [...keys].filter(k => (next?.[k] || state.mode) !== (state.legModes[k] || state.mode));
+    if (diff.length !== 1) return `${n} 님이 구간 이동수단을 바꿨어요`;
+    const [from, to] = diff[0].split('>').map(name), mode = next?.[diff[0]] || state.mode;
+    return `${n} 님이 '${from} → ${to}' 구간을 ${MODES[mode][0]} ${MODE_TO[mode]} 바꿨어요`;
   }
   /** 활동 기록에 남기고, quiet 가 아니면 토스트로도 알림 */
   function note(text, by, { quiet = false } = {}) {
@@ -515,7 +525,7 @@ const Room = (() => {
       const { marker } = await call('POST', `/api/maps/${code}/markers`, { memberId, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
       if (!m.on) await call('PATCH', `/api/maps/${code}/markers/${marker.id}`, { memberId, on: false });
     }
-    await call('PATCH', `/api/maps/${code}`, { memberId, mode: state.mode, loop: state.loop });
+    await call('PATCH', `/api/maps/${code}`, { memberId, mode: state.mode, loop: state.loop, legModes: liveLegModes() });
   }
 
   async function rename() {

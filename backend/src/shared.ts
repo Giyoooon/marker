@@ -2,7 +2,7 @@
 //   POST   /api/maps                         지도 만들기 { title, nickname } → { map, member }
 //   GET    /api/maps/:code                   지도 + 닉네임 + 마커(마킹한 사람, 마지막으로 바꾼 사람 포함)
 //   GET    /api/maps/:code/ws?memberId=      웹소켓: 접속자 목록(presence)과 변경 알림 (src/room.ts)
-//   PATCH  /api/maps/:code                   { memberId, title?, mode?, loop? }
+//   PATCH  /api/maps/:code                   { memberId, title?, mode?, loop?, legModes? }  legModes: {"lat,lng>lat,lng": mode} 기본과 다른 구간 전체
 //   POST   /api/maps/:code/members           닉네임으로 들어가기 { nickname } (이미 있는 닉네임이면 그 사람으로)
 //   POST   /api/maps/:code/markers           마킹 { memberId, name, lat, lng, cat? } → 경로 맨 끝
 //   PATCH  /api/maps/:code/markers/:id       { memberId, name?, cat?, on? } — on 을 바꾸면 경로 맨 끝 / 뺀 곳 맨 아래로
@@ -21,9 +21,12 @@ const CATS = ['stay', 'food', 'cafe', 'sight', 'etc'] as const;
 const MODES: Mode[] = ['car', 'transit', 'walk'];
 /** 카카오 다중 경유지 한도에 맞춘 지도당 마커 수 (숙소 왕복이면 출발지가 한 번 더 들어감) */
 export const MAX_MARKERS = 31;
+/** 구간별 이동수단을 기억하는 최대 구간 수 (마커 31개 순서를 여러 번 바꿔도 충분하게) */
+export const MAX_LEG_MODES = 120;
+const LEG_KEY = /^-?\d{1,3}\.\d{5},-?\d{1,3}\.\d{5}>-?\d{1,3}\.\d{5},-?\d{1,3}\.\d{5}$/;
 
 // ───────── 응답 형식 ─────────
-interface MapRow { code: string; title: string; mode: Mode; loop: number; created_at: string; updated_at: string }
+interface MapRow { code: string; title: string; mode: Mode; loop: number; leg_modes: string; created_at: string; updated_at: string }
 interface MemberRow { id: number; nickname: string; created_at: string; updated_at: string }
 interface MarkerRow {
   id: number; name: string; lat: number; lng: number; cat: string; included: number; position: number;
@@ -44,7 +47,20 @@ export interface ChangeEvent {
   client?: string;
 }
 
-const mapOut = (r: MapRow) => ({ code: r.code, title: r.title, mode: r.mode, loop: !!r.loop, createdAt: r.created_at, updatedAt: r.updated_at });
+const parseLegModes = (raw: string | null | undefined): Record<string, Mode> => { try { return JSON.parse(raw || '{}'); } catch { return {}; } };
+const mapOut = (r: MapRow) => ({ code: r.code, title: r.title, mode: r.mode, loop: !!r.loop, legModes: parseLegModes(r.leg_modes), createdAt: r.created_at, updatedAt: r.updated_at });
+
+/** 구간별 이동수단 검증: {"lat,lng>lat,lng": "car"|"transit"|"walk"} */
+export function legModesOf(v: unknown): Record<string, Mode> {
+  if (!isObj(v)) throw new BadRequest('legModes: {"출발>도착": 이동수단} 객체가 필요해요');
+  const entries = Object.entries(v);
+  if (entries.length > MAX_LEG_MODES) throw new BadRequest(`legModes: 구간은 ${MAX_LEG_MODES}개까지예요`);
+  for (const [k, m] of entries) {
+    if (!LEG_KEY.test(k)) throw new BadRequest(`legModes: 구간 형식이 틀렸어요 (${k.slice(0, 50)})`);
+    if (!MODES.includes(m as Mode)) throw new BadRequest('legModes: 이동수단은 car | transit | walk');
+  }
+  return Object.fromEntries(entries) as Record<string, Mode>;
+}
 const memberOut = (r: MemberRow) => ({ id: r.id, nickname: r.nickname, createdAt: r.created_at, updatedAt: r.updated_at });
 const markerOut = (r: MarkerRow) => ({
   id: r.id, name: r.name, lat: r.lat, lng: r.lng, cat: r.cat, on: !!r.included,
@@ -164,7 +180,8 @@ export async function updateMap(db: D1Database, code: string, body: unknown) {
     changes.mode = body.mode; sets.push('mode = ?'); args.push(body.mode);
   }
   if (body.loop !== undefined) { changes.loop = !!body.loop; sets.push('loop = ?'); args.push(body.loop ? 1 : 0); }
-  if (!sets.length) throw new BadRequest('바꿀 값(title, mode, loop)이 없어요');
+  if (body.legModes !== undefined) { changes.legModes = legModesOf(body.legModes); sets.push('leg_modes = ?'); args.push(JSON.stringify(changes.legModes)); }
+  if (!sets.length) throw new BadRequest('바꿀 값(title, mode, loop, legModes)이 없어요');
   await db.prepare(`UPDATE maps SET ${sets.join(', ')} WHERE code = ?`).bind(...args, code).run();
   return { map: mapOut(await getMapRow(db, code)), event: event('map.update', by, { changes }) };
 }

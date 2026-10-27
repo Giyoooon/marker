@@ -205,3 +205,28 @@ describe('HTTP', () => {
     expect(pre.headers.get('Access-Control-Allow-Methods')).toContain('DELETE');
   });
 });
+
+describe('구간별 이동수단', () => {
+  const K = '35.86000,128.60000>35.87000,128.61000';
+  it('처음엔 비어 있고, 기본과 다른 구간만 저장·조회된다 (지도 수정일도 바뀜)', async () => {
+    const { db, code, map, me } = await setup();
+    expect(map.legModes).toEqual({});
+    await sleep(5);
+    const r = await shared.updateMap(db, code, { memberId: me.id, legModes: { [K]: 'walk' } });
+    expect(r.map.legModes).toEqual({ [K]: 'walk' });
+    expect(r.map.updatedAt > map.updatedAt).toBe(true);
+    expect(r.event).toMatchObject({ action: 'map.update', changes: { legModes: { [K]: 'walk' } } });
+    expect((await shared.getMap(db, code)).map.legModes).toEqual({ [K]: 'walk' });
+  });
+
+  it('형식이 틀리거나 너무 많으면 거부', async () => {
+    const { db, code, me } = await setup();
+    const bad = (legModes: unknown) => expect(shared.updateMap(db, code, { memberId: me.id, legModes })).rejects.toThrow(/legModes/);
+    await bad([]);
+    await bad({ [K]: 'plane' });
+    await bad({ '35.86,128.6>35.87,128.61': 'walk' });      // 소수 5자리가 아님
+    await bad({ "x'; DROP TABLE maps; --": 'walk' });
+    await bad(Object.fromEntries(Array.from({ length: shared.MAX_LEG_MODES + 1 }, (_, k) =>
+      [`35.${String(k).padStart(5, '0')},128.60000>35.87000,128.61000`, 'walk'])));
+  });
+});

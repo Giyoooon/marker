@@ -2,6 +2,8 @@
 const CONFIG = window.MARKER_CONFIG || {};
 const API = (CONFIG.API_BASE || '').replace(/\/+$/, '');
 const MODES = { car: ['🚗', 'car'], transit: ['🚌', 'traffic'], walk: ['🚶', 'walk'] };
+const MODE_NAMES = { car: '자동차', transit: '대중교통', walk: '도보' };
+const MODE_TO = { car: '자동차로', transit: '대중교통으로', walk: '도보로' };
 const CATS = {
   stay:  { icon: '🏨', name: '숙소', color: '#3B5BDB' },
   food:  { icon: '🍽️', name: '맛집', color: '#E03131' },
@@ -39,7 +41,9 @@ async function api(path, body) {
 // ───────────── 상태 ─────────────
 // markers: 목록 순서 = 방문 순서. on 이 꺼진 마커는 지도에만 남고 경로에서 빠짐
 // loop: 경로에 숙소가 있으면 숙소에서 출발해 숙소로 돌아옴
-let state = { mode: 'car', loop: true, markers: [] };
+// mode: 기본 이동수단. legModes: 기본과 다르게 고른 구간만 { "출발 좌표>도착 좌표": mode }
+//   좌표로 기억해서 순서를 바꿔도 같은 두 곳 사이 구간이면 그대로, 새로 생긴 구간은 기본 이동수단
+let state = { mode: 'car', loop: true, legModes: {}, markers: [] };
 let filter = 'all';
 let searchResults = [];
 let clickPlace = null;
@@ -53,10 +57,11 @@ function fromSaved(obj) {
   return {
     mode: MODES[obj.mode] ? obj.mode : 'car',
     loop: obj.loop !== false,
+    legModes: cleanLegModes(obj.legModes),
     markers: partition(list.filter(p => p && isFinite(p.lat) && isFinite(p.lng)).map(pick)),
   };
 }
-const serialize = () => JSON.stringify({ mode: state.mode, loop: state.loop,
+const serialize = () => JSON.stringify({ mode: state.mode, loop: state.loop, ...(Object.keys(liveLegModes()).length ? { legModes: liveLegModes() } : {}),
   markers: state.markers.map(({ name, lat, lng, cat, on }) => ({ name, lat, lng, cat, ...(on ? {} : { on: false }) })) });
 // 공유 지도에 들어가 있을 땐 내 지도(브라우저 저장)를 덮어쓰지 않음
 function save() { if (!Room.active()) localStorage.setItem('marker-trip', serialize()); }
@@ -71,7 +76,7 @@ function load() {
     const raw = localStorage.getItem('marker-trip');
     if (raw) return fromSaved(JSON.parse(raw));
   } catch (e) { console.warn(e); }
-  return { mode: 'car', loop: true, markers: [] };
+  return { mode: 'car', loop: true, legModes: {}, markers: [] };
 }
 
 // markers 는 항상 [경로에 든 마커..., 경로에서 뺀 마커...] 순서. 앞쪽 순서가 방문 순서
@@ -103,6 +108,28 @@ function mark(p) {
   toast(`${cat(m).icon} ${m.name} 마킹했어요`);
 }
 
+// ───────────── 구간별 이동수단 ─────────────
+const legModeKey = (a, b) => `${posKey(a)}>${posKey(b)}`;
+/** 이 구간의 이동수단 (따로 고르지 않았으면 기본) */
+const legMode = (a, b) => state.legModes[legModeKey(a, b)] || state.mode;
+function cleanLegModes(v) {
+  const out = {};
+  if (v && typeof v === 'object') for (const [k, m] of Object.entries(v)) if (MODES[m] && /^[-\d.,]+>[-\d.,]+$/.test(k)) out[k] = m;
+  return out;
+}
+/** 지금 있는 마커끼리의 구간만 (지운 마커의 구간은 저장할 때 버림) */
+function liveLegModes() {
+  const here = new Set(state.markers.map(posKey));
+  return Object.fromEntries(Object.entries(state.legModes).filter(([k]) => k.split('>').every(p => here.has(p))));
+}
+function setLegMode(a, b, mode) {
+  const k = legModeKey(a, b);
+  if (mode === state.mode) delete state.legModes[k]; else state.legModes[k] = mode;
+  changed();
+  if (Room.active()) Room.patchMap({ legModes: liveLegModes() });
+  toast(`${a.name} → ${b.name}, ${MODES[mode][0]} ${MODE_TO[mode]} 바꿨어요`);
+}
+
 // ───────────── 경로 ─────────────
 /** 지금 상태에서 실제로 이어지는 경로. stay 가 있으면 [숙소, ...stops, 숙소] 왕복 */
 function routePlan() {
@@ -112,7 +139,7 @@ function routePlan() {
   const points = stay ? [stay, ...stops] : stops;
   return { stay, stops, points, roundTrip: !!stay && stops.length > 0 };
 }
-const routeKey = P => [state.mode, P.roundTrip ? 'loop' : 'line', ...P.points.map(posKey)].join('|');
+const routeKey = P => { const pts = routeStops(P); return [P.roundTrip ? 'loop' : 'line', ...pts.map((p, k) => (k ? legMode(pts[k - 1], p) + '>' : '') + posKey(p))].join('|'); };
 function currentRoute(P = routePlan()) {
   return routeInfo && routeInfo.key === routeKey(P) && !routeInfo.error ? routeInfo : null;
 }
@@ -173,18 +200,19 @@ const renderSoon = () => { if (!renderQueued) { renderQueued = true; requestAnim
 
 /** 지금 경로의 모든 구간을 계산. 끝나면 resolve (그 사이 경로가 바뀌면 남은 결과는 기억만 하고 그리지 않음) */
 async function fetchRoute() {
-  const seq = ++routeSeq, P = routePlan(), key = routeKey(P), mode = state.mode;
+  const seq = ++routeSeq, P = routePlan(), key = routeKey(P);
   const pts = routeStops(P);
   const pairs = pts.slice(1).map((b, k) => [pts[k], b]);
-  const results = pairs.map(([a, b]) => (distKm(a, b) < 0.02 ? { leg: { min: 0, km: 0, walk: true }, path: null, source: 'kakao' }
-    : legCache.get(legKey(mode, a, b)) || null));
+  const modes = pairs.map(([a, b]) => legMode(a, b));   // 구간마다 이동수단이 다를 수 있음
+  const results = pairs.map(([a, b], k) => (distKm(a, b) < 0.02 ? { leg: { min: 0, km: 0, walk: true }, path: null, source: 'kakao' }
+    : legCache.get(legKey(modes[k], a, b)) || null));
   const publish = () => { if (seq === routeSeq) { routeInfo = buildRoute(key, pairs, results); renderSoon(); } };
   publish();
   const todo = results.map((r, k) => (r ? -1 : k)).filter(k => k >= 0);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(LEG_CONCURRENCY, todo.length) }, async () => {
     while (next < todo.length) {
-      const k = todo[next++], [a, b] = pairs[k];
+      const k = todo[next++], [a, b] = pairs[k], mode = modes[k];
       try {
         const r = await api('/api/leg', { mode, from: { name: a.name, lat: a.lat, lng: a.lng }, to: { name: b.name, lat: b.lat, lng: b.lng } });
         if (r.source === 'kakao') legCache.set(legKey(mode, a, b), r);   // 추정값은 기억하지 않음 (다음에 다시 시도)
@@ -260,13 +288,27 @@ function kakaoLink(a, b, by) {
 }
 const kakaoTo = p => `https://map.kakao.com/link/to/${encodeURIComponent(p.name.replace(/[,/]/g, ' '))},${p.lat},${p.lng}`;
 
+/** 구간 이동수단 고르기 (아이콘을 누르면 목록). 기본과 다르게 고른 구간은 테두리로 표시 */
+function legModePicker(a, b) {
+  const mode = legMode(a, b), own = mode !== state.mode;
+  return `<label class="leg-mode ${own ? 'own' : ''}" title="이 구간 이동수단: ${MODE_NAMES[mode]}${own ? '' : ' (기본)'}">
+    <span aria-hidden="true">${MODES[mode][0]}</span>
+    <select class="leg-mode-sel" data-from="${posKey(a)}" data-to="${posKey(b)}" aria-label="${esc(a.name)}에서 ${esc(b.name)}까지 이동수단">
+      ${Object.keys(MODES).map(k => `<option value="${k}" ${k === mode ? 'selected' : ''}>${MODES[k][0]} ${MODE_NAMES[k]}${k === state.mode ? ' (기본)' : ''}</option>`).join('')}
+    </select></label>`;
+}
+
 function legInner(leg, a, b, prefix = '') {
-  if (!leg) return `<span class="what pending">${prefix}계산 중…</span>`;   // 이 구간은 아직 안 옴
+  const picker = legModePicker(a, b);
+  if (!leg) return `${picker}<span class="what pending">${prefix}계산 중…</span>`;   // 이 구간은 아직 안 옴
   if (leg.km === 0) return `<span class="what">${prefix}같은 자리</span>`;
-  const [icon, by] = leg.walk ? ['🚶', 'walk'] : MODES[state.mode];
+  const mode = legMode(a, b);
+  // 대중교통인데 걷는 게 더 빠른 가까운 구간은 서버가 도보로 알려 줌
+  const by = leg.walk ? 'walk' : MODES[mode][1];
+  const walkNote = leg.walk && mode !== 'walk' ? ' <span class="muted">걸어서</span>' : '';
   const [h, m] = leg.min >= 60 ? [Math.floor(leg.min / 60), leg.min % 60] : [0, leg.min];
   const time = h ? `<b>${h}</b>시간${m ? ` <b>${m}</b>분` : ''}` : `<b>${m}</b>분`;
-  return `<span class="what">${prefix}${icon} ${time} <b>${leg.km}</b>km</span>
+  return `${picker}<span class="what">${prefix}${time} <b>${leg.km}</b>km${walkNote}</span>
     <a class="go" href="${kakaoLink(a, b, by)}" target="_blank" rel="noopener" title="${esc(a.name)} → ${esc(b.name)} 카카오맵 길찾기">길찾기</a>`;
 }
 
@@ -385,7 +427,7 @@ function renderFoot() {
     const straight = info.legs.filter((l, k) => l.km > 0 && !info.paths?.[k]).length;
     const basis = info.source !== 'kakao' ? ', 직선거리 추정'
       : straight ? `, ${straight}구간은 직선거리 추정`
-      : state.mode === 'car' ? '' : ', 도로 거리로 추정';
+      : routeStops(P).slice(1).every((b, k) => legMode(routeStops(P)[k], b) === 'car') ? '' : ', 도로 거리로 추정';
     html = `<span class="big">${human(info.totalMin)}</span><span class="big">${info.totalKm}km</span>
       <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${basis}</span>`;
   } else if (P.points.length >= 2) {
@@ -595,6 +637,12 @@ $('#markers').addEventListener('change', e => {
   const el = e.target, i = +el.dataset.i;
   if (el.classList.contains('inc')) return setOn(i, el.checked);
   else if (el.classList.contains('cat-sel')) { state.markers[i].cat = el.value; if (Room.active()) Room.patchMarker(state.markers[i], { cat: el.value }); }
+  else if (el.classList.contains('leg-mode-sel')) {
+    const at = key => state.markers.find(m => posKey(m) === key);
+    const a = at(el.dataset.from), b = at(el.dataset.to);
+    if (a && b) setLegMode(a, b, el.value);
+    return;
+  }
   else if (el.id === 'loopToggle') { state.loop = el.checked; if (Room.active()) Room.patchMap({ loop: el.checked }); }
   else return;
   changed();

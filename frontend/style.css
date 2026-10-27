@@ -131,6 +131,12 @@ li.leg::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0;
 li.leg.drop-on { background: var(--wash); }
 .leg .what { flex: 1; font-variant-numeric: tabular-nums; }
 .leg .what b { color: var(--ink); }
+/* 구간 이동수단 고르기: 아이콘을 누르면 목록. 기본과 다르게 고른 구간은 남색 테두리 */
+.leg-mode { position: relative; flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 999px; cursor: pointer; font-size: 14px; border: 1px solid transparent; }
+.leg-mode:hover, .leg-mode:focus-within { background: var(--wash); }
+.leg-mode.own { border-color: var(--ink); background: #fff; }
+.leg-mode select { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; border: 0; }
+.leg .muted { color: var(--muted); }
 .go { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 999px; border: 1px solid #C8D7FB; background: #F0F5FF;
   color: var(--link); font-size: 12px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .go:hover { background: #E1EBFF; }
@@ -317,6 +323,7 @@ dialog#dlg .redo:hover { color: var(--ink); text-decoration-color: currentColor;
   input, select { font-size: 16px; }
   .icon-btn { width: 34px; height: 34px; font-size: 14px; }
   li.row label.cat { width: 32px; height: 32px; }
+  .leg-mode { width: 32px; height: 32px; }
   li.row .grip { display: none; }   /* 모바일 끌어서 놓기는 브라우저가 지원하지 않아 ▲▼ 만 */
   #results { max-height: 38dvh; }
   .popup { max-width: min(290px, calc(100vw - 32px)); }

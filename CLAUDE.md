@@ -37,6 +37,10 @@
   - 서버는 도로 구간을 Cache API 에 6시간 저장(`cachedRoad`). 이동수단별 시간은 매번 `legFromRoad` 로 계산
   - 최단 순서로 정렬은 서버에 순서만 받고(`/api/route` `orderOnly: true`) 구간은 같은 방식으로 채움
   - 2026-10-27 측정(10곳, 자동차): 예전 한 번에 1.19초 → 구간별 처음 첫 구간 0.2초·전체 1.05초, 서버 캐시 0.19초
+- **구간별 이동수단**: 아래 바의 이동수단은 **기본**, 목록의 구간마다 아이콘(🚗🚌🚶)을 눌러 따로 고름. 기본과 다르게 고른 구간은 남색 테두리
+  - `state.legModes = { "출발 좌표>도착 좌표": mode }` (posKey, 기본과 다른 구간만). 좌표로 기억해서 순서를 바꿔 구간이 사라졌다 다시 생기면 그대로, 새로 생긴 구간은 기본. 기본과 같은 걸 고르면 지움
+  - 저장·공유 링크(`legModes`, 지금 있는 마커끼리 구간만 `liveLegModes`), 공유 지도는 `maps.leg_modes`(0003) 에 JSON, `PATCH /api/maps/:code {legModes}` 로 전체를 보냄(최대 120구간). 알림은 바뀌기 전 화면 상태와 비교해 "민수 님이 '동성로 → 김광석길' 구간을 🚶 도보로 바꿨어요"
+  - 경로 계산(`fetchRoute`)·`legCache`·`routeKey` 모두 구간 이동수단 기준. 최단 순서로 정렬은 기본 이동수단으로 계산
 - 구간에 마우스를 올리거나(목록·지도) 누르면 그 구간만 강조, 누르면 고정+확대
 - 말풍선(팝업)은 핀 위로 띄워서 핀을 가리지 않음(`KMap.openPopup` 의 offset: 마커 핀 46, 검색 결과 점 14, 지도 클릭 8). 열고 나면 화면·시트에 가린 부분 밖으로 나간 만큼 지도를 옮김(`keepInView`)
 - 방향 화살표는 가시성이 나빠 꺼 둠 (app.js `renderRouteLines` 에서 주석 처리, `KMap.arrows`·`.arrow` 는 남아 있음)
@@ -107,14 +111,14 @@ backend/    Cloudflare Worker (TypeScript)
   matrix.ts   이동시간 행렬 (카카오 다중 목적지 / 직선거리 추정)
   kakao.ts    카카오 로컬·모빌리티 REST 래퍼
   geo.ts / validate.ts  거리·직선 추정 / 경로 요청 검증
-  migrations/ D1 스키마 (0001 공유 지도, 0002 markers.updated_by)
+  migrations/ D1 스키마 (0001 공유 지도, 0002 markers.updated_by, 0003 maps.leg_modes)
   test/       vitest. fake-d1.ts(Node 내장 SQLite 에 실제 마이그레이션 적용), cloudflare-workers-stub.ts
 ```
 
 ## 명령
 
 ```bash
-cd backend && npm test          # vitest (70개)
+cd backend && npm test          # vitest (72개)
 cd backend && npm run typecheck
 cd backend && npx wrangler d1 migrations apply marker --local   # 로컬 DB 준비
 cd backend && npm run dev       # http://localhost:8787 (카카오 키 없으면 추정값으로 동작)
@@ -166,7 +170,7 @@ node --check frontend/app.js    # 프론트는 빌드가 없으니 문법 확인
 ### D1 (공유 지도 DB)
 - DB `marker`, 바인딩 `DB`. 스키마는 `backend/migrations/` — **이미 적용된 마이그레이션은 고치지 말고 새 번호 파일로 추가**
 - **모든 테이블에 `created_at`·`updated_at`** (UTC ISO, 밀리초). `updated_at` 은 트리거가 갱신. 마커·닉네임이 바뀌면 지도 `updated_at` 도 갱신(클라이언트 변경 감지용)
-- 테이블: `maps`(번호·제목·이동수단·왕복), `members`(지도별 닉네임, 지도 안에서 중복 불가), `markers`(마킹한 사람 `marked_by`, 마지막으로 바꾼 사람 `updated_by`, 분류, 경로 포함, 순서)
+- 테이블: `maps`(번호·제목·기본 이동수단·왕복·구간별 이동수단 `leg_modes` JSON), `members`(지도별 닉네임, 지도 안에서 중복 불가), `markers`(마킹한 사람 `marked_by`, 마지막으로 바꾼 사람 `updated_by`, 분류, 경로 포함, 순서)
 - 지도 번호는 DB CHECK 로도 `[A-Z0-9]{4}` 강제. 생성 시 겹치면 최대 10번 다시 뽑음
 - 같은 지도 같은 좌표(소수 5자리) 중복 금지(UNIQUE), 지도당 마커 31개
 - 사람(members)이 지워져도 마커는 남고 `marked_by`·`updated_by` 는 NULL
