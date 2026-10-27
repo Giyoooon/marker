@@ -109,7 +109,7 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
 
   const parts = path.split('/').slice(3);   // [code, sub?, id?]
   const code = shared.normalizeCode(parts[0] ?? '');
-  const [, sub, idStr] = parts;
+  const [, sub, idStr, sub2] = parts;
   const id = Number(idStr);
   const room = () => env.ROOMS.get(env.ROOMS.idFromName(code));
   /** 바뀐 내용을 응답하면서, 같은 지도에 접속한 사람들에게 알림 (응답을 늦추지 않게 waitUntil) */
@@ -123,6 +123,7 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
   if (!sub) {
     if (m === 'GET') return json(await shared.getMap(db, code), 200, { 'Cache-Control': 'no-store' });
     if (m === 'PATCH') return reply(await shared.updateMap(db, code, await readJson(req)));
+    if (m === 'DELETE') return reply(await shared.deleteMap(db, code, new URL(req.url).searchParams.get('memberId')));
   } else if (sub === 'ws' && m === 'GET') {
     return connectRoom(req, env, code, room(), ip);
   } else if (sub === 'members' && !idStr && m === 'POST') {
@@ -130,7 +131,11 @@ async function handleMaps(req: Request, env: Env, ctx: ExecutionContext, path: s
     return reply(r, created ? 201 : 200);
   } else if (sub === 'markers' && !idStr && m === 'POST') {
     return reply(await shared.addMarker(db, code, await readJson(req)), 201);
-  } else if (sub === 'markers' && Number.isInteger(id)) {
+  } else if (sub === 'members' && Number.isInteger(id) && !sub2 && m === 'PATCH') {
+    return reply(await shared.renameMember(db, code, id, await readJson(req)));
+  } else if (sub === 'markers' && Number.isInteger(id) && sub2 === 'vote' && m === 'PUT') {
+    return reply(await shared.voteMarker(db, code, id, await readJson(req)));
+  } else if (sub === 'markers' && Number.isInteger(id) && !sub2) {
     if (m === 'PATCH') return reply(await shared.updateMarker(db, code, id, await readJson(req)));
     if (m === 'DELETE') return reply(await shared.deleteMarker(db, code, id, new URL(req.url).searchParams.get('memberId')));
   } else if (sub === 'order' && m === 'PUT') {
@@ -175,6 +180,7 @@ export default {
       else if (e instanceof BadRequest) res = json({ error: e.message }, 400);
       else if (e instanceof shared.NotFound) res = json({ error: e.message }, 404);
       else if (e instanceof shared.Conflict) res = json({ error: e.message }, 409);
+      else if (e instanceof shared.Forbidden) res = json({ error: e.message }, 403);
       else if (e instanceof KakaoError) res = json({ error: `카카오 API 오류: ${e.message}` }, 502);
       else { console.error(e); res = json({ error: '서버 오류' }, 500); }
     }

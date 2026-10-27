@@ -13,7 +13,7 @@ const CATS = {
 };
 // 카카오 카테고리 그룹 코드 → 분류
 const GROUP_CAT = { AD5: 'stay', FD6: 'food', CE7: 'cafe', AT4: 'sight', CT1: 'sight' };
-const ROUTE_COLOR = '#E8283C';   // 경로선 (빨강, 흰 테두리를 둘러 지도 위에서 잘 보이게)
+const ROUTE_COLOR = '#1E2A44';   // 경로선 (남색 잉크, 흰 테두리를 둘러 지도 위에서 잘 보이게. 빨강은 맛집 핀과 겹쳐서 바꿈)
 const INK = '#1E2A44';
 const DEFAULT_VIEW = { lat: 35.86, lng: 128.6, level: 8 };   // 대구
 const MAX_MARKERS = 31;   // 카카오 다중 경유지 길찾기 한도(32) — 숙소 왕복이면 출발지가 한 번 더 들어감
@@ -51,7 +51,9 @@ let routeInfo = null;    // 마지막 /api/route 응답 + 어떤 경로에 대�
 let routeSeq = 0, routeTimer = null;
 let hoverLeg = null, selLeg = null;   // 강조 중인 구간 (마우스를 올린 구간, 눌러서 고정한 구간)
 
-const pick = m => ({ id: m.id || 'm' + uid(), name: m.name, lat: m.lat, lng: m.lng, cat: CATS[m.cat] ? m.cat : 'etc', on: m.on !== false });
+const MAX_DAY = 9;
+const dayOf = m => (Number.isInteger(m.day) && m.day >= 1 && m.day <= MAX_DAY ? m.day : 1);
+const pick = m => ({ id: m.id || 'm' + uid(), name: m.name, lat: m.lat, lng: m.lng, cat: CATS[m.cat] ? m.cat : 'etc', on: m.on !== false, day: dayOf(m) });
 function fromSaved(obj) {
   const list = obj.markers || obj.route || [];   // 예전 버전의 '내 경로' 도 그대로 가져옴
   return {
@@ -62,7 +64,7 @@ function fromSaved(obj) {
   };
 }
 const serialize = () => JSON.stringify({ mode: state.mode, loop: state.loop, ...(Object.keys(liveLegModes()).length ? { legModes: liveLegModes() } : {}),
-  markers: state.markers.map(({ name, lat, lng, cat, on }) => ({ name, lat, lng, cat, ...(on ? {} : { on: false }) })) });
+  markers: state.markers.map(({ name, lat, lng, cat, on, day }) => ({ name, lat, lng, cat, ...(on ? {} : { on: false }), ...(day > 1 ? { day } : {}) })) });
 // 공유 지도에 들어가 있을 땐 내 지도(브라우저 저장)를 덮어쓰지 않음
 function save() { if (!Room.active()) localStorage.setItem('marker-trip', serialize()); }
 function load() {
@@ -79,18 +81,24 @@ function load() {
   return { mode: 'car', loop: true, legModes: {}, markers: [] };
 }
 
-// markers 는 항상 [경로에 든 마커..., 경로에서 뺀 마커...] 순서. 앞쪽 순서가 방문 순서
-const partition = list => [...list.filter(m => m.on), ...list.filter(m => !m.on)];
+// markers 는 항상 [경로에 든 마커(1일차…, 2일차…), 경로에서 뺀 마커...] 순서. 앞쪽 순서가 방문 순서
+// 일차가 바뀌면 같은 일차 안에서는 원래 앞뒤를 지킴(안정 정렬) → 1일차에서 2일차로 옮기면 2일차 맨 앞, 반대면 1일차 맨 끝
+const partition = list => [...list.filter(m => m.on).map((m, k) => [m, k]).sort((x, y) => dayOf(x[0]) - dayOf(y[0]) || x[1] - y[1]).map(x => x[0]),
+  ...list.filter(m => !m.on)];
 const onCount = () => state.markers.filter(m => m.on).length;
+/** 경로에 든 마커 중 가장 늦은 일차 (새로 마킹하면 이 날 맨 끝) */
+const lastDay = () => Math.max(1, ...state.markers.filter(m => m.on).map(dayOf));
+const multiDay = () => new Set(state.markers.filter(m => m.on).map(dayOf)).size > 1;
 /** 경로에 넣으면 경로 맨 끝으로, 빼면 '경로에서 뺀 곳' 맨 아래로 */
 function setOn(i, on) {
   const [m] = state.markers.splice(i, 1);
   m.on = on;
   state.markers.splice(on ? onCount() : state.markers.length, 0, m);
+  state.markers = partition(state.markers);   // 여러 날이면 그 마커 일차의 맨 끝
   KMap.ready() && KMap.closePopup();
   changed();
   if (Room.active()) Room.patchMarker(m, { on });
-  toast(on ? `${m.name}, 경로 맨 끝에 넣었어요` : `${m.name}, 경로에서 뺐어요`);
+  toast(on ? `${m.name}, ${multiDay() ? `${dayOf(m)}일차` : '경로'} 맨 끝에 넣었어요` : `${m.name}, 경로에서 뺐어요`);
 }
 
 const isMarked = p => state.markers.some(m => posKey(m) === posKey(p));
@@ -98,8 +106,8 @@ function mark(p) {
   if (!Room.canWrite()) return;   // 공유 지도에선 닉네임부터
   if (isMarked(p)) { toast('이미 마킹한 곳이에요'); return; }
   if (state.markers.length >= MAX_MARKERS) { toast(`마커는 ${MAX_MARKERS}개까지 새길 수 있어요`); return; }
-  const m = pick({ name: p.name || '이름 없는 곳', lat: p.lat, lng: p.lng, cat: p.cat });
-  state.markers.splice(onCount(), 0, m);   // 경로 맨 끝 (뺀 마커들보다 앞)
+  const m = pick({ name: p.name || '이름 없는 곳', lat: p.lat, lng: p.lng, cat: p.cat, day: lastDay() });
+  state.markers.splice(onCount(), 0, m);   // 경로 맨 끝 = 마지막 날 맨 끝 (뺀 마커들보다 앞)
   KMap.ready() && KMap.closePopup();
   if (filter !== 'all' && filter !== m.cat) filter = 'all';
   changed();
@@ -131,27 +139,37 @@ function setLegMode(a, b, mode) {
 }
 
 // ───────────── 경로 ─────────────
-/** 지금 상태에서 실제로 이어지는 경로. stay 가 있으면 [숙소, ...stops, 숙소] 왕복 */
+/**
+ * 지금 상태에서 실제로 이어지는 경로. 일차마다 따로 이어지고(날과 날 사이엔 구간 없음),
+ * 숙소 왕복이면 날마다 [숙소, ...그날 들를 곳, 숙소]
+ * pairs: 모든 구간(출발 a → 도착 b)을 1일차부터 차례로. 구간 번호 k 는 이 배열의 자리
+ */
 function routePlan() {
   const on = state.markers.filter(m => m.on);
   const stay = state.loop ? on.find(m => m.cat === 'stay') || null : null;
   const stops = stay ? on.filter(m => m !== stay) : on;
   const points = stay ? [stay, ...stops] : stops;
-  return { stay, stops, points, roundTrip: !!stay && stops.length > 0 };
+  const days = [...new Set(stops.map(dayOf))].sort((a, b) => a - b).map(day => {
+    const ds = stops.filter(m => dayOf(m) === day);
+    const roundTrip = !!stay && ds.length > 0;
+    return { day, stops: ds, seq: roundTrip ? [stay, ...ds, stay] : ds, roundTrip };
+  });
+  const pairs = days.flatMap(d => d.seq.slice(1).map((b, j) =>
+    ({ a: d.seq[j], b, day: d.day, first: j === 0, back: d.roundTrip && j === d.seq.length - 2 })));
+  return { stay, stops, points, roundTrip: !!stay && stops.length > 0, days, pairs, multi: days.length > 1 };
 }
-const routeKey = P => { const pts = routeStops(P); return [P.roundTrip ? 'loop' : 'line', ...pts.map((p, k) => (k ? legMode(pts[k - 1], p) + '>' : '') + posKey(p))].join('|'); };
+const routeKey = P => P.pairs.map(p => `${legMode(p.a, p.b)}:${posKey(p.a)}>${posKey(p.b)}`).join('|');
 function currentRoute(P = routePlan()) {
   return routeInfo && routeInfo.key === routeKey(P) && !routeInfo.error ? routeInfo : null;
 }
-const routeBody = (P, extra = {}) => ({ mode: state.mode, roundTrip: P.roundTrip,
-  points: P.points.map(({ name, lat, lng }) => ({ name, lat, lng })), ...extra });
+const plainPoints = list => list.map(({ name, lat, lng }) => ({ name, lat, lng }));
 
 function changed() {
   hoverLeg = selLeg = null;   // 경로가 바뀌면 구간 번호도 바뀜
   render();
   save();
   clearTimeout(routeTimer);
-  if (routePlan().points.length >= 2) routeTimer = setTimeout(fetchRoute, 120);
+  if (routePlan().pairs.length) routeTimer = setTimeout(fetchRoute, 120);
 }
 
 // ── 구간별 경로: 구간마다 /api/leg 를 동시에 요청하고, 오는 구간부터 바로 그림 ──
@@ -159,7 +177,6 @@ function changed() {
 const legCache = new Map();   // `${mode}|${출발}>${도착}` → { leg, path, source }
 const LEG_CONCURRENCY = 6;
 const legKey = (mode, a, b) => `${mode}|${posKey(a)}>${posKey(b)}`;
-const routeStops = P => (P.roundTrip ? [...P.points, P.stay] : P.points);
 function distKm(a, b) {
   const r = x => x * Math.PI / 180, dLat = r(b.lat - a.lat), dLng = r(b.lng - a.lng);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2;
@@ -201,8 +218,7 @@ const renderSoon = () => { if (!renderQueued) { renderQueued = true; requestAnim
 /** 지금 경로의 모든 구간을 계산. 끝나면 resolve (그 사이 경로가 바뀌면 남은 결과는 기억만 하고 그리지 않음) */
 async function fetchRoute() {
   const seq = ++routeSeq, P = routePlan(), key = routeKey(P);
-  const pts = routeStops(P);
-  const pairs = pts.slice(1).map((b, k) => [pts[k], b]);
+  const pairs = P.pairs.map(p => [p.a, p.b]);
   const modes = pairs.map(([a, b]) => legMode(a, b));   // 구간마다 이동수단이 다를 수 있음
   const results = pairs.map(([a, b], k) => (distKm(a, b) < 0.02 ? { leg: { min: 0, km: 0, walk: true }, path: null, source: 'kakao' }
     : legCache.get(legKey(modes[k], a, b)) || null));
@@ -225,8 +241,9 @@ async function fetchRoute() {
   }));
 }
 
-// 순서를 바꿀 곳이 두 곳 이상일 때만 의미 있음 (출발지·숙소는 고정)
-const canOptimize = P => (P.roundTrip ? P.stops.length >= 2 : P.points.length >= 3);
+// 순서를 바꿀 곳이 두 곳 이상인 날이 있을 때만 의미 있음 (출발지·숙소는 고정). 날마다 따로 정렬
+const sortableDays = P => P.days.filter(d => (d.roundTrip ? d.stops.length >= 2 : d.stops.length >= 3));
+const canOptimize = P => sortableDays(P).length > 0;
 async function optimize() {
   const P = routePlan();
   if (!canOptimize(P)) return;
@@ -235,15 +252,20 @@ async function optimize() {
   clearTimeout(routeTimer);
   const seq = ++routeSeq;
   try {
-    // 서버는 순서만 정하고(orderOnly), 구간은 화면이 구간마다 계산 (이미 아는 구간은 바로)
-    const info = await api('/api/route', routeBody(P, { optimize: true, orderOnly: true }));
+    // 서버는 순서만 정하고(orderOnly), 구간은 화면이 구간마다 계산 (이미 아는 구간은 바로). 날마다 동시에
+    const results = await Promise.all(sortableDays(P).map(async d => {
+      const pts = d.roundTrip ? [P.stay, ...d.stops] : d.stops;
+      const info = await api('/api/route', { mode: state.mode, roundTrip: d.roundTrip, points: plainPoints(pts), optimize: true, orderOnly: true });
+      return { d, pts, info };
+    }));
     if (seq !== routeSeq) return;
-    // 경로에 든 마커들이 차지하던 목록 자리에 새 순서대로 다시 채움 (빠진 마커와 숙소는 제자리)
-    const ordered = info.order.map(i => P.points[i]);
-    const moving = P.roundTrip ? ordered.slice(1) : ordered;
-    const slots = (P.roundTrip ? P.stops : P.points).map(m => state.markers.indexOf(m)).sort((a, b) => a - b);
     const before = state.markers.map(m => m.id).join();
-    slots.forEach((pos, k) => { state.markers[pos] = moving[k]; });
+    // 그날 마커들이 차지하던 목록 자리에 새 순서대로 다시 채움 (다른 날·빠진 마커·숙소는 제자리)
+    for (const { d, pts, info } of results) {
+      const ordered = info.order.map(i => pts[i]);
+      const moving = d.roundTrip ? ordered.slice(1) : ordered;
+      d.stops.map(m => state.markers.indexOf(m)).sort((a, b) => a - b).forEach((pos, k) => { state.markers[pos] = moving[k]; });
+    }
     hoverLeg = selLeg = null;
     render(); save();
     if (Room.active()) Room.pushOrder();
@@ -261,19 +283,34 @@ async function optimize() {
 }
 function swap(i, j) {
   if (j < 0 || j >= onCount()) return;   // 경로 안에서만
+  // 날의 경계를 넘으면 자리를 바꾸지 않고 옆 날로 옮김 (▲: 앞 날 맨 끝, ▼: 다음 날 맨 앞)
+  if (dayOf(state.markers[i]) !== dayOf(state.markers[j])) return setDay(i, dayOf(state.markers[j]));
   [state.markers[i], state.markers[j]] = [state.markers[j], state.markers[i]];
   changed();
   if (Room.active()) Room.pushOrder();
 }
-/** from 번째 마커를 to 자리(원래 배열 기준 삽입 위치)로 옮김 */
-function move(from, to) {
+/** from 번째 마커를 to 자리(원래 배열 기준 삽입 위치)로 옮김. day 를 주면 그 일차로 (다른 날 사이에 놓은 경우) */
+function move(from, to, day) {
   to = Math.min(to, onCount());   // 경로에서 뺀 곳 사이로는 못 들어감
   if (to > from) to--;
-  if (to === from) return;
-  const [p] = state.markers.splice(from, 1);
+  const p = state.markers[from], newDay = day ?? dayOf(p), dayChanged = newDay !== dayOf(p);
+  if (to === from && !dayChanged) return;
+  state.markers.splice(from, 1);
   state.markers.splice(to, 0, p);
+  p.day = newDay;
+  state.markers = partition(state.markers);
   changed();
-  if (Room.active()) Room.pushOrder();
+  if (Room.active()) { if (dayChanged) Room.patchMarker(p, { day: newDay }); Room.pushOrder(); }
+}
+/** i 번째 마커를 d 일차로 (같은 날 안의 앞뒤는 그대로) */
+function setDay(i, d) {
+  const m = state.markers[i];
+  if (dayOf(m) === d) return;
+  m.day = d;
+  state.markers = partition(state.markers);
+  changed();
+  if (Room.active()) Room.patchMarker(m, { day: d });
+  toast(`${m.name}, ${d}일차로 옮겼어요`);
 }
 function fitAll() {
   if (!KMap.ready() || !state.markers.length) return;
@@ -312,24 +349,34 @@ function legInner(leg, a, b, prefix = '') {
     <a class="go" href="${kakaoLink(a, b, by)}" target="_blank" rel="noopener" title="${esc(a.name)} → ${esc(b.name)} 카카오맵 길찾기">길찾기</a>`;
 }
 
-/** 목록·지도에 공통으로 쓰는 경로 정보: 마커별 번호와 '다음 곳까지' 구간 */
+/** 목록·지도에 공통으로 쓰는 경로 정보: 마커별 번호, '다음 곳까지' 구간, 날마다 숙소에서 나가는 첫 구간, 날마다 합계 */
 function routeView() {
   const P = routePlan(), info = currentRoute(P);
-  const num = new Map(), legAfter = new Map();
-  (P.stay ? P.stops : P.points).forEach((m, i) => num.set(m.id, i + 1));
-  let firstLeg = null;
+  const num = new Map(), legAfter = new Map(), firstLegOf = new Map(), dayTotal = new Map();
+  P.stops.forEach((m, i) => num.set(m.id, i + 1));   // 번호는 여러 날이어도 이어서 (지도 핀 번호가 겹치지 않게)
   if (info) {
-    const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
-    seq.slice(0, -1).forEach((m, k) => {
-      const leg = { k, leg: info.legs[k], from: m, to: seq[k + 1], back: P.roundTrip && k === seq.length - 2 };
-      if (P.roundTrip && k === 0) firstLeg = leg; else legAfter.set(m.id, leg);
+    P.pairs.forEach((p, k) => {
+      const leg = { k, leg: info.legs[k], from: p.a, to: p.b, back: p.back, day: p.day };
+      if (P.stay && p.first) firstLegOf.set(p.day, leg); else legAfter.set(p.a.id, leg);
+      const t = dayTotal.get(p.day) || { min: 0, km: 0, done: true };
+      if (info.legs[k]) { t.min += info.legs[k].min; t.km += info.legs[k].km; } else t.done = false;
+      dayTotal.set(p.day, t);
     });
   }
-  return { P, info, num, legAfter, firstLeg };
+  return { P, info, num, legAfter, firstLegOf, dayTotal };
+}
+
+/** 번호 배지 = 일차 고르기 (누르면 1일차, 2일차 … 새 날) */
+function dayPicker(m, i, badge) {
+  const used = lastDay(), max = Math.min(MAX_DAY, used + 1), d = dayOf(m);
+  return `<label class="num day-pick" title="${d}일차. 눌러서 일차 바꾸기"><span>${badge}</span>
+    <select class="day-sel" data-i="${i}" aria-label="${esc(m.name)} 일차 (지금 ${d}일차)">
+      ${Array.from({ length: max }, (_, k) => k + 1).map(n => `<option value="${n}" ${n === d ? 'selected' : ''}>${n}일차${n > used ? ' (새 날)' : ''}</option>`).join('')}
+    </select></label>`;
 }
 
 function renderList() {
-  const M = state.markers, { P, info, num, legAfter, firstLeg } = routeView();
+  const M = state.markers, { P, info, num, legAfter, firstLegOf, dayTotal } = routeView();
   const box = $('#markers');
   if (!M.length) {
     box.innerHTML = `<p class="hint">위에서 장소를 검색해 <b>마킹</b>하거나, 지도를 눌러 원하는 자리에 핀을 새기세요.<br>
@@ -348,14 +395,14 @@ function renderList() {
   </div>`;
 
   // 경로 상태 안내
-  if (P.points.length >= 2 && !info) {
+  if (P.pairs.length && !info) {
     const err = routeInfo && routeInfo.key === routeKey(P) && routeInfo.error;
     if (err) html += `<div class="note">경로를 불러오지 못했어요: ${esc(err)}</div>`;
   }
   info?.warnings.forEach(w => html += `<div class="note">${esc(w)}</div>`);
 
-  // 경로 목록 (구간은 '전체' 보기에서만 — 걸러 보면 앞뒤 순서가 안 보여서)
-  // 숙소 왕복이면 숙소를 맨 위 출발지로 고정해서 보여 줌 (목록 안 실제 자리와 상관없이)
+  // 경로 목록 (구간·일차 구분은 '전체' 보기에서만 — 걸러 보면 앞뒤 순서가 안 보여서)
+  // 숙소 왕복이면 숙소를 맨 위 출발지로 고정하고, 날마다 숙소에서 나가는 첫 구간을 그날 맨 위에
   const showLegs = filter === 'all';
   const stayCand = M.find(m => m.on && m.cat === 'stay');
   const visible = M.map((m, i) => ({ m, i })).filter(({ m }) => filter === 'all' || m.cat === filter);
@@ -367,36 +414,49 @@ function renderList() {
     <select class="cat-sel" data-i="${i}" aria-label="${esc(m.name)} 분류">
       ${Object.entries(CATS).map(([k, cc]) => `<option value="${k}" ${k === m.cat ? 'selected' : ''}>${cc.icon} ${cc.name}</option>`).join('')}
     </select></label>`;
+  const legRow = (leg, at, prefix = '') => `<li class="leg" data-at="${at}" data-day="${leg.day}" data-leg="${leg.k}">${legInner(leg.leg, leg.from, leg.to, prefix)}</li>`;
   html += '<ol class="list">';
+  let curDay = null;
   rows.forEach(({ m, i }) => {
     const c = cat(m), pinned = P.stay === m;
-    const badge = pinned ? '🏨' : num.get(m.id);
+    // 날이 바뀌는 자리: 여러 날이면 'n일차' 구분선, 숙소 왕복이면 그날 첫 구간(숙소 → 첫 곳)
+    if (!pinned && showLegs && dayOf(m) !== curDay) {
+      curDay = dayOf(m);
+      if (P.multi) {
+        const t = dayTotal.get(curDay), n = P.days.find(d => d.day === curDay)?.stops.length ?? 0;
+        html += `<li class="day-sep" data-at="${i}" data-day="${curDay}"><b>${curDay}일차</b>
+          <span class="muted">${n}곳${t?.done && t.min ? `, ${human(t.min)} ${Math.round(t.km * 10) / 10}km` : ''}</span></li>`;
+      }
+      const fl = firstLegOf.get(curDay);
+      if (fl) html += legRow(fl, i);
+    }
     html += `<li class="row ${pinned ? 'pinned' : ''} ${Room.isFlashing(m.id) ? 'flash' : ''}" ${pinned ? '' : 'draggable="true"'} data-i="${i}" style="--c:${c.color}">
       <input type="checkbox" class="inc" data-i="${i}" checked aria-label="${esc(m.name)} 경로에서 빼기">
       <span class="grip" title="${pinned ? '숙소는 출발지로 고정돼요' : '끌어서 순서 바꾸기'}" aria-hidden="true">${pinned ? '' : '⠿'}</span>
-      <span class="num" title="${pinned ? '출발·복귀' : '방문 순서'}">${badge}</span>
+      ${pinned ? '<span class="num" title="출발·복귀">🏨</span>' : dayPicker(m, i, num.get(m.id))}
       <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
+      ${Room.voteBadge(m)}
       ${Room.byBadge(m)}
       ${catPicker(m, i, c)}
       <button class="icon-btn" data-act="up" data-i="${i}" ${i === 0 || pinned ? 'disabled' : ''} aria-label="위로">▲</button>
       <button class="icon-btn" data-act="down" data-i="${i}" ${i === lastOn || pinned ? 'disabled' : ''} aria-label="아래로">▼</button>
       <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
     </li>`;
-    // 첫 숙소 바로 아래: 출발·복귀 스위치와 첫 구간
+    // 첫 숙소 바로 아래: 출발·복귀 스위치
     if (m === stayCand && showLegs) {
       html += `<li class="leg loop" data-at="${i + 1}">
         <label class="switch"><input type="checkbox" id="loopToggle" ${state.loop ? 'checked' : ''}><span></span></label>
-        <label for="loopToggle" class="loop-label">숙소에서 출발해서 돌아오기</label>
+        <label for="loopToggle" class="loop-label">${P.multi ? '날마다 숙소에서 출발해서 돌아오기' : '숙소에서 출발해서 돌아오기'}</label>
       </li>`;
-      if (state.loop && firstLeg) html += `<li class="leg" data-at="${i + 1}" data-leg="${firstLeg.k}">${legInner(firstLeg.leg, firstLeg.from, firstLeg.to)}</li>`;
     }
     const leg = showLegs && legAfter.get(m.id);
-    if (leg) html += `<li class="leg" data-at="${i + 1}" data-leg="${leg.k}">${legInner(leg.leg, leg.from, leg.to, leg.back ? '🏨 숙소로 ' : '')}</li>`;
+    if (leg) html += legRow(leg, i + 1, leg.back ? '🏨 숙소로 ' : '');
   });
   html += '</ol>';
   if (!rows.length) html += offRows.length
     ? '<p class="hint">경로에 든 곳이 없어요. 아래에서 체크하면 경로 맨 끝에 붙어요.</p>'
     : '<p class="hint">이 분류에는 아직 마커가 없어요.</p>';
+  else if (showLegs && !P.multi && P.stops.length >= 3) html += '<p class="hint small">번호를 누르면 1일차, 2일차로 나눌 수 있어요.</p>';
 
   // 경로에서 뺀 곳: 순서가 없으니 번호·손잡이·▲▼ 없이 아래에 모아 둠
   if (offRows.length) {
@@ -406,6 +466,7 @@ function renderList() {
       html += `<li class="row off ${Room.isFlashing(m.id) ? 'flash' : ''}" data-i="${i}" style="--c:${c.color}">
         <input type="checkbox" class="inc" data-i="${i}" aria-label="${esc(m.name)} 경로 맨 끝에 넣기" title="체크하면 경로 맨 끝에 붙어요">
         <span class="name" data-act="focus" data-i="${i}" title="${esc(m.name)}">${esc(m.name)}</span>
+        ${Room.voteBadge(m)}
         ${Room.byBadge(m)}
         ${catPicker(m, i, c)}
         <button class="icon-btn del" data-act="del" data-i="${i}" aria-label="${esc(m.name)} 삭제">✕</button>
@@ -427,10 +488,11 @@ function renderFoot() {
     const straight = info.legs.filter((l, k) => l.km > 0 && !info.paths?.[k]).length;
     const basis = info.source !== 'kakao' ? ', 직선거리 추정'
       : straight ? `, ${straight}구간은 직선거리 추정`
-      : routeStops(P).slice(1).every((b, k) => legMode(routeStops(P)[k], b) === 'car') ? '' : ', 도로 거리로 추정';
+      : P.pairs.every(p => legMode(p.a, p.b) === 'car') ? '' : ', 도로 거리로 추정';
+    const days = P.multi ? `${P.days.length}일, ` : '';
     html = `<span class="big">${human(info.totalMin)}</span><span class="big">${info.totalKm}km</span>
-      <span class="muted">${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${basis}</span>`;
-  } else if (P.points.length >= 2) {
+      <span class="muted">${days}${P.roundTrip ? `숙소 왕복, ${P.stops.length}곳` : `${P.points.length}곳`}${basis}</span>`;
+  } else if (P.pairs.length) {
     html = '<span class="muted">경로를 계산하고 있어요…</span>';
   } else if (state.markers.length) {
     html = `<span class="muted">${stopsCount ? '경로에 한 곳 더 넣으면 이동시간이 나와요' : '체크한 마커가 경로로 이어져요'}</span>`;
@@ -442,8 +504,8 @@ function renderFoot() {
 
 /** 구간 k 를 지도에 그릴 좌표: 도로 경로, 못 찾았으면 양 끝을 잇는 직선 */
 function legPath(P, info, k) {
-  const seq = P.roundTrip ? [...P.points, P.stay] : P.points;
-  return info.paths?.[k] || [[seq[k].lat, seq[k].lng], [seq[k + 1].lat, seq[k + 1].lng]];
+  const { a, b } = P.pairs[k];
+  return info.paths?.[k] || [[a.lat, a.lng], [b.lat, b.lng]];
 }
 const activeLeg = () => hoverLeg ?? selLeg;
 
@@ -455,7 +517,7 @@ function renderRouteLines() {
   if (!KMap.ready()) return;
   KMap.clear('route');
   const P = routePlan(), info = currentRoute(P);
-  if (P.points.length < 2 || !info) return;
+  if (!P.pairs.length || !info) return;
   const active = activeLeg();
   info.legs.forEach((leg, k) => {
     if (!leg || leg.km === 0) return;   // 아직 안 온 구간, 같은 자리
@@ -517,7 +579,7 @@ function renderMap() {
       lat: m.lat, lng: m.lng, color: c.color, drop: true, cls: inRoute ? '' : 'off',
       label: isLoopStay ? '🏨' : inRoute ? num.get(m.id) : c.icon,
       size: inRoute ? 32 : 24, z: inRoute ? 60 : 30,
-      title: `${inRoute && !isLoopStay ? num.get(m.id) + '. ' : ''}${m.name}`,
+      title: `${inRoute && !isLoopStay ? `${P.multi ? `${dayOf(m)}일차 ` : ''}${num.get(m.id)}. ` : ''}${m.name}`,
       onClick: () => openMarkerPopup(i),
     });
   });
@@ -527,6 +589,7 @@ function openMarkerPopup(i) {
   KMap.openPopup(m.lat, m.lng, `<span class="title">${esc(m.name)}</span>
     <div class="tag" style="--c:${c.color}">${c.icon} ${c.name}${m.on ? '' : ', 경로에서 빠짐'}</div>
     ${Room.byLine(m)}
+    ${Room.voteButtons(m, i)}
     <div class="actions">
       <a class="btn sm" href="${kakaoTo(m)}" target="_blank" rel="noopener">여기로 길찾기</a>
       <button class="btn sm" data-act="toggleOn" data-i="${i}">${m.on ? '경로에서 빼기' : '경로에 넣기'}</button>
@@ -619,6 +682,12 @@ function onAction(e) {
   else if (act === 'up') swap(i, i - 1);
   else if (act === 'down') swap(i, i + 1);
   else if (act === 'toggleOn') setOn(i, !state.markers[i].on);
+  else if (act === 'vote') {
+    const v = Room.vote(state.markers[i], +el.dataset.v);
+    if (v === undefined) return;
+    renderList(); openMarkerPopup(i);
+    toast(v === 1 ? '👍 가고 싶어요' : v === -1 ? '👎 별로예요' : '표를 거뒀어요');
+  }
   else if (act === 'del') {
     const [m] = state.markers.splice(i, 1);
     if (Room.active()) Room.deleteMarker(m);
@@ -636,6 +705,7 @@ function onAction(e) {
 $('#markers').addEventListener('change', e => {
   const el = e.target, i = +el.dataset.i;
   if (el.classList.contains('inc')) return setOn(i, el.checked);
+  else if (el.classList.contains('day-sel')) return setDay(i, +el.value);
   else if (el.classList.contains('cat-sel')) { state.markers[i].cat = el.value; if (Room.active()) Room.patchMarker(state.markers[i], { cat: el.value }); }
   else if (el.classList.contains('leg-mode-sel')) {
     const at = key => state.markers.find(m => posKey(m) === key);
@@ -667,11 +737,12 @@ $('#markers').addEventListener('click', e => {
 let dragFrom = null;
 const list = $('#markers');
 function dropTarget(e) {
-  const row = e.target.closest('li.row:not(.off), li.leg');
+  const row = e.target.closest('li.row:not(.off), li.leg, li.day-sep');
   if (!row) return null;
-  if (row.classList.contains('leg')) return { row, to: +row.dataset.at, cls: 'drop-on' };
+  // 구간·일차 구분선 위: 그 자리로, 그 날로 (숙소 왕복 스위치 줄은 날이 없음)
+  if (!row.classList.contains('row')) return { row, to: +row.dataset.at, day: row.dataset.day ? +row.dataset.day : undefined, cls: 'drop-on' };
   const r = row.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
-  return { row, to: +row.dataset.i + (after ? 1 : 0), cls: after ? 'drop-after' : 'drop-before' };
+  return { row, to: +row.dataset.i + (after ? 1 : 0), day: dayOf(state.markers[+row.dataset.i]), cls: after ? 'drop-after' : 'drop-before' };
 }
 const clearDropMarks = () => list.querySelectorAll('.drop-before, .drop-after, .drop-on')
   .forEach(el => el.classList.remove('drop-before', 'drop-after', 'drop-on'));
@@ -696,7 +767,7 @@ list.addEventListener('drop', e => {
   const t = dropTarget(e);
   if (!t) return;
   e.preventDefault();
-  move(dragFrom, t.to);
+  move(dragFrom, t.to, t.day);
 });
 list.addEventListener('dragend', () => {
   dragFrom = null;

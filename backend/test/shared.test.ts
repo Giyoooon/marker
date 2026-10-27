@@ -230,3 +230,91 @@ describe('구간별 이동수단', () => {
       [`35.${String(k).padStart(5, '0')},128.60000>35.87000,128.61000`, 'walk'])));
   });
 });
+
+describe('지도 관리: 만든 사람·삭제·닉네임 바꾸기', () => {
+  it('만든 사람이 기록되고, 지도 삭제는 만든 사람만 (닉네임·마커·표도 함께 지워짐)', async () => {
+    const { db, code, map, me } = await setup();
+    expect(map.createdBy).toBe(me.id);
+    const { member: other } = await shared.joinMap(db, code, { nickname: '민수' });
+    const { marker } = await shared.addMarker(db, code, { memberId: other.id, ...P('동성로', 0) });
+    await shared.voteMarker(db, code, marker.id, { memberId: other.id, value: 1 });
+    await expect(shared.deleteMap(db, code, other.id)).rejects.toThrow(/만든 사람만/);
+    const r = await shared.deleteMap(db, code, me.id);
+    expect(r.event).toMatchObject({ action: 'map.delete', by: { id: me.id }, changes: { title: '대구 1박 2일' } });
+    await expect(shared.getMap(db, code)).rejects.toThrow(/없는 지도/);
+    for (const t of ['members', 'markers', 'marker_votes']) {
+      expect((await db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).first<{ n: number }>())!.n).toBe(0);
+    }
+  });
+
+  it('닉네임은 본인만 바꾸고, 겹치면 거부. 마커의 마킹한 사람 이름도 따라 바뀜', async () => {
+    const { db, code, me } = await setup();
+    const { member: other } = await shared.joinMap(db, code, { nickname: '민수' });
+    await shared.addMarker(db, code, { memberId: me.id, ...P('동성로', 0) });
+    await expect(shared.renameMember(db, code, me.id, { memberId: other.id, nickname: 'x' })).rejects.toThrow(/내 닉네임만/);
+    await expect(shared.renameMember(db, code, me.id, { memberId: me.id, nickname: '민수' })).rejects.toThrow(/이미 있는/);
+    const r = await shared.renameMember(db, code, me.id, { memberId: me.id, nickname: '지윤이' });
+    expect(r.member.nickname).toBe('지윤이');
+    expect(r.event).toMatchObject({ action: 'member.rename', changes: { from: '지윤', to: '지윤이' } });
+    expect((await shared.getMap(db, code)).markers[0].markedBy).toEqual({ id: me.id, nickname: '지윤이' });
+  });
+});
+
+describe('일차', () => {
+  it('마킹할 때·바꿀 때 일차를 정하고, 조회는 일차 순', async () => {
+    const { db, code, me } = await setup();
+    const a = (await shared.addMarker(db, code, { memberId: me.id, ...P('a', 0), day: 2 })).marker;
+    const b = (await shared.addMarker(db, code, { memberId: me.id, ...P('b', 1) })).marker;
+    expect([a.day, b.day]).toEqual([2, 1]);
+    expect((await shared.getMap(db, code)).markers.map(m => m.name)).toEqual(['b', 'a']);
+    const r = await shared.updateMarker(db, code, b.id, { memberId: me.id, day: 3 });
+    expect(r.marker.day).toBe(3);
+    expect(r.event?.changes).toEqual({ day: 3 });
+    for (const bad of [0, 10, 1.5, 'x']) {
+      await expect(shared.updateMarker(db, code, b.id, { memberId: me.id, day: bad })).rejects.toThrow(/day/);
+    }
+  });
+});
+
+describe('가볼 곳 투표', () => {
+  it('👍·👎·거두기, 사람마다 하나, 누가 했는지 보임. 같은 표를 다시 보내면 알리지 않음', async () => {
+    const { db, code, me } = await setup();
+    const { member: other } = await shared.joinMap(db, code, { nickname: '민수' });
+    const { marker } = await shared.addMarker(db, code, { memberId: me.id, ...P('동성로', 0) });
+    expect(marker.votes).toEqual({ up: [], down: [] });
+    let r = await shared.voteMarker(db, code, marker.id, { memberId: me.id, value: 1 });
+    expect(r.event).toMatchObject({ action: 'marker.vote', marker: { name: '동성로' }, changes: { value: 1 } });
+    r = await shared.voteMarker(db, code, marker.id, { memberId: other.id, value: -1 });
+    expect(r.marker.votes).toEqual({ up: [{ id: me.id, nickname: '지윤' }], down: [{ id: other.id, nickname: '민수' }] });
+    r = await shared.voteMarker(db, code, marker.id, { memberId: other.id, value: 1 });   // 마음을 바꿈
+    expect(r.marker.votes.up.map(v => v.nickname)).toEqual(['지윤', '민수']);
+    expect(r.marker.votes.down).toEqual([]);
+    expect((await shared.voteMarker(db, code, marker.id, { memberId: other.id, value: 1 })).event).toBeUndefined();
+    await sleep(5);
+    const before = (await shared.getMap(db, code)).map.updatedAt;
+    await shared.voteMarker(db, code, marker.id, { memberId: me.id, value: 0 });
+    const after = await shared.getMap(db, code);
+    expect(after.markers[0].votes.up.map(v => v.nickname)).toEqual(['민수']);
+    expect(after.map.updatedAt > before).toBe(true);   // 다른 사람 화면이 알아채도록
+    await expect(shared.voteMarker(db, code, marker.id, { memberId: me.id, value: 2 })).rejects.toThrow(/value/);
+  });
+});
+
+describe('관리·투표 API 경로', () => {
+  it('PUT vote / PATCH members/:id / DELETE map, 권한 없으면 403', async () => {
+    const db = fakeD1();
+    const env = { DB: db, ALLOWED_ORIGINS: 'https://x.test', ROOMS: { idFromName: (n: string) => n, get: () => ({ fetch: async () => new Response(null) }) } };
+    const ctx = { waitUntil: () => {} };
+    const call = (method: string, path: string, body?: unknown) => worker.fetch(new Request(`https://api.test${path}`,
+      { method, body: body ? JSON.stringify(body) : undefined }), env as never, ctx as never);
+    const { map, member } = await shared.createMap(db, { title: 't', nickname: 'a' });
+    const { member: b } = await shared.joinMap(db, map.code, { nickname: 'b' });
+    const { marker } = await shared.addMarker(db, map.code, { memberId: member.id, ...P('x', 0) });
+    expect((await call('PUT', `/api/maps/${map.code}/markers/${marker.id}/vote`, { memberId: b.id, value: -1 })).status).toBe(200);
+    expect((await call('PATCH', `/api/maps/${map.code}/members/${member.id}`, { memberId: b.id, nickname: 'z' })).status).toBe(403);
+    expect((await call('PATCH', `/api/maps/${map.code}/members/${b.id}`, { memberId: b.id, nickname: 'z' })).status).toBe(200);
+    expect((await call('DELETE', `/api/maps/${map.code}?memberId=${b.id}`)).status).toBe(403);
+    expect((await call('DELETE', `/api/maps/${map.code}?memberId=${member.id}`)).status).toBe(200);
+    expect((await call('GET', `/api/maps/${map.code}`)).status).toBe(404);
+  });
+});

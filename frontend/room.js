@@ -55,11 +55,13 @@ const Room = (() => {
   }
 
   // ───────── 서버 → 화면 ─────────
-  const fromServer = m => ({ id: m.id, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, on: m.on, by: m.markedBy, updatedBy: m.updatedBy });
+  const fromServer = m => ({ id: m.id, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, on: m.on, day: m.day || 1,
+    by: m.markedBy, updatedBy: m.updatedBy, votes: m.votes || { up: [], down: [] } });
   function apply(data) {
     room.title = data.map.title;
     room.members = data.members;
     room.updatedAt = data.map.updatedAt;
+    room.createdBy = data.map.createdBy;   // 지도 삭제는 이 사람만
     if (room.me && !room.members.some(x => x.id === room.me.id)) forgetMe();
     state = { mode: data.map.mode, loop: data.map.loop, legModes: cleanLegModes(data.map.legModes), markers: partition(data.markers.map(fromServer)) };
     renderBar();
@@ -170,6 +172,12 @@ const Room = (() => {
   let refreshSoon = null;
   function onChange(ev) {
     if (ev.client === CLIENT_ID) return;   // 내 화면이 보낸 변경: 응답 뒤 이미 서버 상태로 맞춤
+    if (ev.action === 'map.delete') {        // 지도가 지워짐 → 알리고 내 지도로
+      toast(`${describe(ev)}. 내 지도로 돌아가요`);
+      leaving = true; disconnect();
+      setTimeout(leave, 1800);
+      return;
+    }
     // 새 닉네임 알림(member.join)은 곧이어 오는 접속 알림('들어왔어요')과 겹쳐서 따로 알리지 않음
     if (ev.by?.id !== room.me?.id && ev.action !== 'member.join') {
       note(describe(ev), ev.by);
@@ -187,6 +195,7 @@ const Room = (() => {
         const did = [];
         if ('name' in c) did.push(`이름을 ${quoted(c.name, '으로', '로')}`);
         if ('cat' in c) { const k = CATS[c.cat]?.name ?? c.cat; did.push(`분류를 ${CATS[c.cat]?.icon ?? ''} ${k}${josa(k, '으로', '로')}`); }
+        if ('day' in c && !did.length) return `${n} 님이 ${quoted(name, '을', '를')} ${c.day}일차로 옮겼어요`;
         if (did.length) return `${n} 님이 '${name}'의 ${did.join(', ')} 바꿨어요`;
         if (c.on === false) return `${n} 님이 ${quoted(name, '을', '를')} 경로에서 뺐어요`;
         if (c.on === true) return `${n} 님이 ${quoted(name, '을', '를')} 경로 맨 끝에 넣었어요`;
@@ -200,6 +209,11 @@ const Room = (() => {
         if ('legModes' in c) return describeLegModes(n, c.legModes);
         return `${n} 님이 지도 설정을 바꿨어요`;
       case 'member.join': return `${n} 님이 처음 들어왔어요`;
+      case 'member.rename': return `${c.from} 님이 닉네임을 ${quoted(c.to, '으로', '로')} 바꿨어요`;
+      case 'marker.vote':
+        return c.value === 1 ? `${n} 님이 '${name}'에 👍 좋아요를 눌렀어요`
+          : c.value === -1 ? `${n} 님이 '${name}'에 👎 별로예요를 눌렀어요` : `${n} 님이 '${name}'의 표를 거뒀어요`;
+      case 'map.delete': return `${n} 님이 이 지도를 지웠어요`;
       default: return `${n} 님이 지도를 바꿨어요`;
     }
   }
@@ -268,7 +282,18 @@ const Room = (() => {
     return false;
   }
   const me = () => room.me?.id;
-  const addMarker = m => write('POST', `/api/maps/${room.code}/markers`, { memberId: me(), name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
+  const addMarker = m => write('POST', `/api/maps/${room.code}/markers`, { memberId: me(), name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, day: m.day || 1 });
+  /** 가볼 곳 투표. 이미 같은 표면 거둠(0). 화면을 먼저 바꾸고 보냄 */
+  function vote(m, value) {
+    if (!room || typeof m.id !== 'number' || !canWrite()) return;
+    const mine = myVote(m), v = mine === value ? 0 : value;
+    const who = { id: room.me.id, nickname: room.me.nickname };
+    m.votes = { up: m.votes.up.filter(x => x.id !== who.id), down: m.votes.down.filter(x => x.id !== who.id) };
+    if (v) m.votes[v > 0 ? 'up' : 'down'].push(who);
+    write('PUT', `/api/maps/${room.code}/markers/${m.id}/vote`, { memberId: me(), value: v });
+    return v;
+  }
+  const myVote = m => (!room?.me || !m.votes ? 0 : m.votes.up.some(x => x.id === room.me.id) ? 1 : m.votes.down.some(x => x.id === room.me.id) ? -1 : 0);
   const patchMarker = (m, body) => typeof m.id === 'number' && write('PATCH', `/api/maps/${room.code}/markers/${m.id}`, { memberId: me(), ...body });
   const deleteMarker = m => typeof m.id === 'number' && write('DELETE', `/api/maps/${room.code}/markers/${m.id}?memberId=${me()}`);
   const patchMap = body => write('PATCH', `/api/maps/${room.code}`, { memberId: me(), ...body });
@@ -296,6 +321,25 @@ const Room = (() => {
     const edited = m.updatedBy ? `<div class="by-line sub">${avatar(m.updatedBy)} <b>${esc(m.updatedBy.nickname)}</b> 님이 마지막으로 바꿈</div>` : '';
     return marked + edited;
   }
+  /** 목록 행의 표 수 (공유 지도에서 표가 있을 때만) */
+  function voteBadge(m) {
+    if (!room || !m.votes) return '';
+    const { up, down } = m.votes, mine = myVote(m);
+    if (!up.length && !down.length) return '';
+    return `<span class="votes" title="좋아요 ${up.map(x => x.nickname).join(', ') || '없음'} / 별로예요 ${down.map(x => x.nickname).join(', ') || '없음'}">${
+      up.length ? `<span class="${mine > 0 ? 'mine' : ''}">👍${up.length}</span>` : ''}${down.length ? `<span class="${mine < 0 ? 'mine' : ''}">👎${down.length}</span>` : ''}</span>`;
+  }
+  /** 팝업의 투표 버튼과 누가 눌렀는지 */
+  function voteButtons(m, i) {
+    if (!room || !m.votes) return '';
+    const { up, down } = m.votes, mine = myVote(m);
+    const names = list => list.map(x => esc(x.nickname)).join(', ');
+    return `<div class="vote-row" role="group" aria-label="가볼 곳 투표">
+      <button class="btn sm vote ${mine > 0 ? 'on' : ''}" data-act="vote" data-v="1" data-i="${i}" aria-pressed="${mine > 0}">👍 가고 싶어요 <b>${up.length}</b></button>
+      <button class="btn sm vote ${mine < 0 ? 'on' : ''}" data-act="vote" data-v="-1" data-i="${i}" aria-pressed="${mine < 0}">👎 별로예요 <b>${down.length}</b></button>
+    </div>${up.length || down.length ? `<div class="vote-who">${up.length ? `👍 ${names(up)}` : ''}${up.length && down.length ? '<br>' : ''}${down.length ? `👎 ${names(down)}` : ''}</div>` : ''}`;
+  }
+
   function renderBar() {
     const bar = $('#roomBar');
     if (!room) { bar.innerHTML = ''; return; }
@@ -320,7 +364,7 @@ const Room = (() => {
         <button class="link-btn" data-act="roomLeave">내 지도로</button>
       </div>
       <div class="room-people">
-        ${room.me ? `<button class="me" data-act="roomNickname" title="닉네임 바꾸기">${avatar(room.me, 'mine')}<b>${esc(room.me.nickname)}</b></button>`
+        ${room.me ? `<button class="me" data-act="roomManage" title="닉네임 바꾸기, 나가기, 지도 삭제">${avatar(room.me, 'mine')}<b>${esc(room.me.nickname)}</b><span class="caret" aria-hidden="true">▾</span></button>`
                   : '<button class="me" data-act="roomNickname"><b>닉네임 정하기</b></button>'}
         ${others.length ? `<span class="others">${others.slice(0, 7).map(o => `<span class="who ${known && !isOnline(o.id) ? 'away' : ''}" title="${esc(o.nickname)}${isOnline(o.id) ? ' (접속 중)' : ''}">${avatar(o)}${isOnline(o.id) ? '<i class="on-dot"></i>' : ''}</span>`).join('')}${others.length > 7 ? `<span class="more">+${others.length - 7}</span>` : ''}</span>` : ''}
         ${status}
@@ -404,6 +448,70 @@ const Room = (() => {
     });   // 이름 버튼은 submit 버튼이라 그 value(닉네임)로 들어감
     // 이 기기 이름으로 계속하기가 있으면 그 버튼에, 없으면 새 이름 칸에 초점
     (dlg().querySelector('.continue') || dlg().querySelector('#nick'))?.focus();
+  }
+
+  /** 지도 관리: 내 닉네임 바꾸기, 다른 이름으로 들어가기, 이 지도에서 나가기, (만든 사람만) 지도 삭제 */
+  function openManage() {
+    if (!room.me) { askNickname(); return; }
+    const owner = room.createdBy === room.me.id;
+    openDialog(`
+      <h2>지도 관리</h2>
+      <p class="hint"><b>${esc(room.title)}</b> (${room.code})</p>
+      <label class="dlg-label" for="rename">내 닉네임</label>
+      <div class="inline-field">
+        <input id="rename" name="nickname" maxlength="20" value="${esc(room.me.nickname)}" autocomplete="nickname">
+        <button class="btn" value="rename" data-enter>바꾸기</button>
+      </div>
+      <p class="hint small">바꾸면 내가 마킹한 곳의 이름도 함께 바뀌어요.</p>
+      <div class="manage-list">
+        <button class="link-btn" value="switch">다른 이름으로 들어가기</button>
+        <button class="link-btn" value="leave">이 지도에서 나가기</button>
+        <p class="hint small">이 기기에서 닉네임을 잊고 내 지도로 돌아가요. 지도와 마커는 그대로 남아요.</p>
+        ${owner ? `<button class="link-btn danger" value="delete">지도 삭제</button>
+          <p class="hint small">지도를 만든 사람만 지울 수 있어요. 모두의 화면에서 사라져요.</p>` : ''}
+      </div>
+      <div class="dlg-actions"><button class="btn primary" value="cancel">닫기</button></div>`,
+    async (fd, value, form) => {
+      if (value === 'switch') { askNickname(); return false; }
+      if (value === 'leave') { forgetMe(); leave(); return false; }
+      if (value === 'delete') { confirmDelete(); return false; }
+      if (value !== 'rename') return;
+      const nickname = String(fd.get('nickname') || '').trim();
+      if (!nickname) { form.querySelector('#rename').focus(); return false; }
+      if (nickname === room.me.nickname) return;
+      try {
+        const { member } = await call('PATCH', `/api/maps/${room.code}/members/${room.me.id}`, { memberId: room.me.id, nickname });
+        const before = room.me.nickname;
+        room.me = { id: member.id, nickname: member.nickname };
+        localStorage.setItem(meKey(room.code), JSON.stringify(room.me));
+        localStorage.setItem('marker-nicknames', JSON.stringify(deviceNames().filter(n => n !== before)));
+        rememberName(member.nickname);
+        toast(`닉네임을 ${quoted(member.nickname, '으로', '로')} 바꿨어요`);
+        connect();   // 접속자 목록의 내 이름도 새 이름으로
+        refresh(true);
+      } catch (e) { toast(e.message); return false; }
+    });
+  }
+  function confirmDelete() {
+    openDialog(`
+      <h2>이 지도를 지울까요?</h2>
+      <p class="hint"><b>${esc(room.title)}</b> (${room.code})의 마커 ${state.markers.length}개와 닉네임, 투표가 모두 지워지고 되돌릴 수 없어요. 들어와 있는 친구들 화면에서도 사라져요.</p>
+      <div class="dlg-actions">
+        <button class="btn" value="back">취소</button>
+        <button class="btn danger-fill" value="delete">지우기</button>
+      </div>`,
+    async (fd, value, form) => {
+      if (value === 'back') { openManage(); return false; }
+      try {
+        form.querySelector('[value=delete]').textContent = '지우는 중…';
+        await call('DELETE', `/api/maps/${room.code}?memberId=${room.me.id}`);
+        localStorage.removeItem(meKey(room.code));
+        leaving = true; disconnect();
+        toast('지도를 지웠어요. 내 지도로 돌아가요');
+        setTimeout(leave, 1200);
+      } catch (e) { toast(e.message); form.querySelector('[value=delete]').textContent = '지우기'; return false; }
+    });
+    dlg().querySelector('[value=back]').focus();
   }
 
   /** 번호·링크 공유 창. 방금 만든 지도면 축하 문구로 */
@@ -522,7 +630,7 @@ const Room = (() => {
   /** 내 지도의 마커·이동수단·숙소 왕복 설정을 새 공유 지도에 그대로 올림 (순서 유지) */
   async function copyMarkers(code, memberId) {
     for (const m of state.markers) {
-      const { marker } = await call('POST', `/api/maps/${code}/markers`, { memberId, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat });
+      const { marker } = await call('POST', `/api/maps/${code}/markers`, { memberId, name: m.name, lat: m.lat, lng: m.lng, cat: m.cat, day: m.day || 1 });
       if (!m.on) await call('PATCH', `/api/maps/${code}/markers/${marker.id}`, { memberId, on: false });
     }
     await call('PATCH', `/api/maps/${code}`, { memberId, mode: state.mode, loop: state.loop, legModes: liveLegModes() });
@@ -553,6 +661,7 @@ const Room = (() => {
     else if (act === 'roomRename') rename();
     else if (act === 'roomLeave') leave();
     else if (act === 'roomNickname') askNickname();
+    else if (act === 'roomManage') openManage();
     else if (act === 'roomActivity') toggleActivity();
   });
 
@@ -561,6 +670,6 @@ const Room = (() => {
     me: () => room?.me || null,
     code: () => room?.code,
     enter, openLanding, openShare, canWrite, addMarker, patchMarker, deleteMarker, patchMap, pushOrder, refresh,
-    byBadge, byLine, isFlashing,
+    byBadge, byLine, isFlashing, vote, voteBadge, voteButtons,
   };
 })();
